@@ -416,10 +416,20 @@ struct CommentCard: View {
     let onDelete: () -> Void
     let onTap: () -> Void
 
+    @State private var editingBody: String
     @FocusState private var bodyFocused: Bool
 
-    private var bodyBinding: Binding<String> {
-        Binding(get: { comment.body }, set: { onUpdate($0) })
+    init(comment: MTDComment,
+         isFocused: Bool,
+         onUpdate: @escaping (String) -> Void,
+         onDelete: @escaping () -> Void,
+         onTap: @escaping () -> Void) {
+        self.comment = comment
+        self.isFocused = isFocused
+        self.onUpdate = onUpdate
+        self.onDelete = onDelete
+        self.onTap = onTap
+        self._editingBody = State(initialValue: comment.body)
     }
 
     var body: some View {
@@ -429,7 +439,12 @@ struct CommentCard: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: onDelete) {
+                Button {
+                    // Defocus first so the text field doesn't try to commit
+                    // a stale body after deletion.
+                    bodyFocused = false
+                    DispatchQueue.main.async { onDelete() }
+                } label: {
                     Image(systemName: "trash")
                         .font(.caption)
                 }
@@ -438,7 +453,7 @@ struct CommentCard: View {
                 .help("Delete comment")
             }
 
-            TextField("Comment", text: bodyBinding, axis: .vertical)
+            TextField("Comment", text: $editingBody, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...12)
                 .focused($bodyFocused)
@@ -466,11 +481,25 @@ struct CommentCard: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
+        // Sync local editing state from the parsed comment when card mounts.
+        .onAppear { editingBody = comment.body }
+        // External changes (e.g. user edits in raw mode) — sync only if not editing.
+        .onChange(of: comment.body) { _, newBody in
+            if !bodyFocused { editingBody = newBody }
+        }
+        // When parent focus state changes, update local TextField focus.
         .onChange(of: isFocused) { _, focused in
             if focused { bodyFocused = true }
         }
-        .onAppear {
-            if isFocused { bodyFocused = true }
+        // When TextField focus changes, sync card focus and commit on blur.
+        .onChange(of: bodyFocused) { _, focused in
+            if focused {
+                onTap()    // tells parent: this card is now active
+            } else {
+                if editingBody != comment.body {
+                    onUpdate(editingBody)
+                }
+            }
         }
     }
 }
@@ -501,15 +530,19 @@ final class ReadingTextView: NSTextView {
     private func updateReadingMargins() {
         guard let tc = textContainer else { return }
         let avail = bounds.width
-        let extra = max(0, (avail - maxReadingWidth) / 2)
-        let leftPad = max(basePadding, basePadding + extra)
-        let rightPad = leftPad + marginIconReserve
-        // Use textContainerInset for the LEFT side; manage textContainer.size for the right.
+        let reserve = marginIconReserve
+        // Target text container width: capped at maxReadingWidth, never below 40.
+        let targetContainer = min(maxReadingWidth,
+                                  max(40, avail - 2 * basePadding - reserve))
+        let slack = max(0, avail - targetContainer - reserve)
+        let leftPad = max(basePadding, slack / 2)
+        let rightPad = leftPad + reserve
+        let containerWidth = max(40, avail - leftPad - rightPad)
+
         let inset = NSSize(width: leftPad, height: verticalPadding)
         if textContainerInset != inset { textContainerInset = inset }
-        let containerWidth = max(40, avail - leftPad - rightPad)
-        if !tc.widthTracksTextView == false || tc.size.width != containerWidth {
-            tc.widthTracksTextView = false
+        if tc.widthTracksTextView { tc.widthTracksTextView = false }
+        if abs(tc.size.width - containerWidth) > 0.5 {
             tc.size = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
         }
         needsDisplay = true
@@ -698,18 +731,14 @@ final class ReadingTextView: NSTextView {
               let tc = textContainer,
               let storage = textStorage else { return }
         let origin = textContainerOrigin
-        let symbolName = "text.bubble"
-        guard let baseSymbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
-        else { return }
-
-        // Theme-aware color: resolve secondaryLabelColor in this view's appearance.
-        let resolvedColor = NSColor.secondaryLabelColor.usingColorSpace(.sRGB)
-            ?? NSColor.secondaryLabelColor
+        guard let baseSymbol = NSImage(systemSymbolName: "text.bubble",
+                                        accessibilityDescription: nil) else { return }
         let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
-            .applying(.init(paletteColors: [resolvedColor]))
-        let symbol = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
+        let configured = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
+        configured.isTemplate = true
 
-        // Track lines we've already drawn an icon on
+        let tintColor = NSColor.secondaryLabelColor
+
         var seenY: Set<Int> = []
         let fullRange = NSRange(location: 0, length: storage.length)
         storage.enumerateAttribute(.mtdComment, in: fullRange) { value, attrRange, _ in
@@ -721,7 +750,15 @@ final class ReadingTextView: NSTextView {
             seenY.insert(key)
             let iconRect = marginIconRect(for: bounding, origin: origin)
             if !iconRect.intersects(dirtyRect) { return }
-            symbol.draw(in: iconRect)
+
+            // Draw tinted template image: lockFocus + sourceAtop fill.
+            let tinted = NSImage(size: configured.size, flipped: false) { rect in
+                configured.draw(in: rect)
+                tintColor.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.draw(in: iconRect)
         }
     }
 
