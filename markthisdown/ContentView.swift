@@ -484,8 +484,9 @@ final class ReadingTextView: NSTextView {
 
     var onCommentTap: ((Int) -> Void)?
 
-    private let marginIconSize: CGFloat = 14
+    private let marginIconSize: CGFloat = 16
     private let marginIconRightInset: CGFloat = 6
+    private let marginIconReserve: CGFloat = 32   // right-side reserved area for comment icons
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -498,14 +499,20 @@ final class ReadingTextView: NSTextView {
     }
 
     private func updateReadingMargins() {
+        guard let tc = textContainer else { return }
         let avail = bounds.width
         let extra = max(0, (avail - maxReadingWidth) / 2)
-        let side = max(basePadding, basePadding + extra)
-        let target = NSSize(width: side, height: verticalPadding)
-        if textContainerInset != target {
-            textContainerInset = target
-            needsDisplay = true
+        let leftPad = max(basePadding, basePadding + extra)
+        let rightPad = leftPad + marginIconReserve
+        // Use textContainerInset for the LEFT side; manage textContainer.size for the right.
+        let inset = NSSize(width: leftPad, height: verticalPadding)
+        if textContainerInset != inset { textContainerInset = inset }
+        let containerWidth = max(40, avail - leftPad - rightPad)
+        if !tc.widthTracksTextView == false || tc.size.width != containerWidth {
+            tc.widthTracksTextView = false
+            tc.size = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
         }
+        needsDisplay = true
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -538,9 +545,9 @@ final class ReadingTextView: NSTextView {
               let storage = textStorage else { return nil }
         let origin = textContainerOrigin
         let rightX = origin.x + tc.size.width
-        // Quick reject: must be in the right margin band
-        if point.x < rightX - marginIconSize - marginIconRightInset - 4
-            || point.x > rightX + marginIconSize { return nil }
+        // Quick reject: must be in the reserved right margin band
+        if point.x < rightX + marginIconRightInset - 6
+            || point.x > rightX + marginIconRightInset + marginIconSize + 6 { return nil }
 
         let full = NSRange(location: 0, length: storage.length)
         var found: Int? = nil
@@ -562,10 +569,12 @@ final class ReadingTextView: NSTextView {
     }
 
     private func marginIconRect(for bounding: NSRect, origin: NSPoint) -> NSRect {
+        // Place icon JUST OUTSIDE the right edge of the text container,
+        // inside the reserved right margin band.
         let rightX = origin.x + (textContainer?.size.width ?? 0)
         let cy = origin.y + bounding.midY
         return NSRect(
-            x: rightX - marginIconSize - marginIconRightInset,
+            x: rightX + marginIconRightInset,
             y: cy - marginIconSize / 2,
             width: marginIconSize,
             height: marginIconSize
@@ -690,12 +699,17 @@ final class ReadingTextView: NSTextView {
               let storage = textStorage else { return }
         let origin = textContainerOrigin
         let symbolName = "text.bubble"
-        guard let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
-        let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize - 2, weight: .regular)
-        let configured = symbol.withSymbolConfiguration(cfg) ?? symbol
-        configured.isTemplate = true
+        guard let baseSymbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        else { return }
 
-        // Track lines we've already drawn an icon on (use minY of bounding)
+        // Theme-aware color: resolve secondaryLabelColor in this view's appearance.
+        let resolvedColor = NSColor.secondaryLabelColor.usingColorSpace(.sRGB)
+            ?? NSColor.secondaryLabelColor
+        let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
+            .applying(.init(paletteColors: [resolvedColor]))
+        let symbol = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
+
+        // Track lines we've already drawn an icon on
         var seenY: Set<Int> = []
         let fullRange = NSRange(location: 0, length: storage.length)
         storage.enumerateAttribute(.mtdComment, in: fullRange) { value, attrRange, _ in
@@ -707,10 +721,7 @@ final class ReadingTextView: NSTextView {
             seenY.insert(key)
             let iconRect = marginIconRect(for: bounding, origin: origin)
             if !iconRect.intersects(dirtyRect) { return }
-
-            NSColor.secondaryLabelColor.setFill()
-            configured.draw(in: iconRect, from: .zero, operation: .sourceOver,
-                            fraction: 0.85, respectFlipped: true, hints: nil)
+            symbol.draw(in: iconRect)
         }
     }
 
@@ -849,9 +860,47 @@ struct MarkdownEditor: NSViewRepresentable {
         context.coordinator.parent = self
         tv.onCommentTap = onCommentTap
         applyAppearance(to: tv)
-        if tv.string != text { tv.string = text }
+        if tv.string != text {
+            Self.smartReplace(in: tv, with: text)
+        }
         context.coordinator.applyHighlighting(to: tv)
         context.coordinator.lastMode = mode
+    }
+
+    /// Replace only the changed range — preserves cursor, scroll, selection, focus.
+    /// Used when the binding mutates from outside (e.g. comment edits in sidebar).
+    fileprivate static func smartReplace(in tv: NSTextView, with newText: String) {
+        let oldNS = tv.string as NSString
+        let newNS = newText as NSString
+        let oldLen = oldNS.length
+        let newLen = newNS.length
+        if oldLen == newLen && oldNS.isEqual(to: newText) { return }
+
+        // Find common prefix length
+        var prefix = 0
+        let upper = min(oldLen, newLen)
+        while prefix < upper
+            && oldNS.character(at: prefix) == newNS.character(at: prefix) {
+            prefix += 1
+        }
+        // Find common suffix length
+        var suffix = 0
+        while suffix < (upper - prefix)
+            && oldNS.character(at: oldLen - 1 - suffix)
+               == newNS.character(at: newLen - 1 - suffix) {
+            suffix += 1
+        }
+
+        let oldChange = NSRange(location: prefix, length: oldLen - prefix - suffix)
+        let newSubLen = newLen - prefix - suffix
+        let replacement = newNS.substring(with: NSRange(location: prefix, length: newSubLen))
+
+        guard let storage = tv.textStorage else { return }
+        // Direct storage mutation — does NOT fire textDidChange (that's user-edits only),
+        // does NOT touch undo, does NOT scroll.
+        storage.beginEditing()
+        storage.replaceCharacters(in: oldChange, with: replacement)
+        storage.endEditing()
     }
 
     fileprivate func bodyFontForCurrentMode() -> NSFont {
