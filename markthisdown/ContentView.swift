@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var mode: DisplayMode = .rendered
     @State private var saveState: SaveState = .untitled
     @State private var debounceTask: Task<Void, Never>? = nil
+    @State private var showHelp: Bool = false
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
 
     @Environment(\.colorScheme) private var colorScheme
@@ -93,6 +94,16 @@ struct ContentView: View {
                         Label("New", systemImage: "doc.badge.plus")
                     }
                     .help("New document (⌘N)")
+
+                    Button {
+                        showHelp.toggle()
+                    } label: {
+                        Label("Help", systemImage: "questionmark.circle")
+                    }
+                    .help("Shortcuts and terminal commands")
+                    .popover(isPresented: $showHelp, arrowEdge: .bottom) {
+                        HelpView().frame(width: 380)
+                    }
                 }
             }
             .onAppear { recomputeStateForFileURL() }
@@ -128,6 +139,8 @@ struct ContentView: View {
         let block = """
             ---
             title:
+            description: |
+
             date: \(today)
             tags: []
             ---
@@ -540,4 +553,60 @@ enum SyntaxHighlighter {
 
 private func NSLocationInRange(_ loc: Int, expandedToInclude r: NSRange) -> Bool {
     return loc >= r.location && loc <= r.location + r.length
+}
+
+// MARK: - Help popover
+
+struct HelpView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("MarkThisDown").font(.title3.bold())
+
+                section("Keyboard shortcuts", rows: [
+                    ("⌘N", "New document"),
+                    ("⌘S", "Save (also auto-saves)"),
+                    ("⌘E", "Toggle raw / rendered view"),
+                    ("⌘L", "Cycle theme"),
+                    ("⌘W", "Close window (prompts if untitled)"),
+                    ("⌘F", "Find in document"),
+                ])
+
+                section("Editing tips", rows: [
+                    ("Lists", "Enter continues `- `, `* `, `+ `, or numbered (auto-increments). Empty marker line exits."),
+                    ("Markers", "**, *, ` markers hide when cursor is off the styled span."),
+                    ("Links", "[text](url) and bare https://… or domain.com — click to open."),
+                    ("Frontmatter", "Use the toolbar button to insert a YAML block."),
+                    ("Comments", "<!-- @ note --> stays in the file but doesn't render. Useful for AI workflows."),
+                ])
+
+                section("Terminal", rows: [
+                    ("open -a MarkThisDown notes.md", "Open file"),
+                    ("open -a MarkThisDown", "Untitled window"),
+                    ("open -a MarkThisDown a.md b.md", "Two windows"),
+                    ("alias mtd='open -a MarkThisDown'", "Add to ~/.zshrc for short alias"),
+                ])
+            }
+            .padding(16)
+        }
+        .frame(maxHeight: 520)
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, rows: [(String, String)]) -> some View {
+        Text(title).font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(rows, id: \.0) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(row.0)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 140, alignment: .leading)
+                    Text(row.1)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
 }
