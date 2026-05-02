@@ -8,6 +8,11 @@ enum SaveState { case untitled, autosaving, saved }
 extension NSAttributedString.Key {
     static let mtdHR = NSAttributedString.Key("mtdHR")
     static let mtdHRColor = NSAttributedString.Key("mtdHRColor")
+    static let mtdQuote = NSAttributedString.Key("mtdQuote")
+    static let mtdQuoteBG = NSAttributedString.Key("mtdQuoteBG")
+    static let mtdQuoteBar = NSAttributedString.Key("mtdQuoteBar")
+    static let mtdBullet = NSAttributedString.Key("mtdBullet")
+    static let mtdBulletColor = NSAttributedString.Key("mtdBulletColor")
 }
 
 private var appVersion: String {
@@ -202,19 +207,70 @@ final class ReadingTextView: NSTextView {
         }
     }
 
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawQuoteBackgrounds(in: rect)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawHorizontalRules(in: dirtyRect)
+        drawQuoteBars(in: dirtyRect)
+        drawBullets(in: dirtyRect)
+    }
+
+    // MARK: drawing helpers
+
+    private func drawQuoteBackgrounds(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let leftX = origin.x
+        let rightX = origin.x + tc.size.width
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdQuoteBG, in: fullRange) { value, attrRange, _ in
+            guard let color = value as? NSColor else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let r = NSRect(x: leftX, y: origin.y + bounding.minY,
+                           width: rightX - leftX, height: bounding.height)
+            if !r.intersects(dirtyRect) { return }
+            color.setFill()
+            r.fill()
+        }
+    }
+
+    private func drawQuoteBars(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let leftX = origin.x
+        let barWidth: CGFloat = 3
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdQuoteBar, in: fullRange) { value, attrRange, _ in
+            guard let color = value as? NSColor else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let r = NSRect(x: leftX, y: origin.y + bounding.minY,
+                           width: barWidth, height: bounding.height)
+            if !r.intersects(dirtyRect) { return }
+            color.setFill()
+            r.fill()
+        }
     }
 
     private func drawHorizontalRules(in dirtyRect: NSRect) {
         guard let lm = layoutManager,
               let tc = textContainer,
               let storage = textStorage else { return }
-        let containerOrigin = textContainerOrigin
+        let origin = textContainerOrigin
         let usedRect = lm.usedRect(for: tc)
-        let leftX = containerOrigin.x
-        let rightX = containerOrigin.x + max(usedRect.width, tc.size.width)
+        let leftX = origin.x
+        let rightX = origin.x + max(usedRect.width, tc.size.width)
         let lineWidth: CGFloat = 1
 
         let fullRange = NSRange(location: 0, length: storage.length)
@@ -224,7 +280,7 @@ final class ReadingTextView: NSTextView {
             let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
             let drawRect = NSRect(
                 x: leftX,
-                y: containerOrigin.y + bounding.midY - lineWidth / 2,
+                y: origin.y + bounding.midY - lineWidth / 2,
                 width: rightX - leftX,
                 height: lineWidth
             )
@@ -235,6 +291,44 @@ final class ReadingTextView: NSTextView {
                 ?? NSColor.separatorColor
             color.setFill()
             drawRect.fill()
+        }
+    }
+
+    private func drawBullets(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let bullet = "•" as NSString
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdBullet, in: fullRange) { value, attrRange, _ in
+            guard (value as? Bool) == true else { return }
+            let color = (storage.attribute(.mtdBulletColor,
+                                           at: attrRange.location,
+                                           effectiveRange: nil) as? NSColor)
+                ?? NSColor.secondaryLabelColor
+            let font = (storage.attribute(.font,
+                                          at: attrRange.location,
+                                          effectiveRange: nil) as? NSFont)
+                ?? NSFont.systemFont(ofSize: 14)
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: font, .foregroundColor: color
+            ]
+            let bulletSize = bullet.size(withAttributes: attrs)
+            // Center bullet on hidden marker glyph
+            let cx = origin.x + bounding.midX
+            let cy = origin.y + bounding.midY
+            let drawRect = NSRect(
+                x: cx - bulletSize.width / 2,
+                y: cy - bulletSize.height / 2,
+                width: bulletSize.width,
+                height: bulletSize.height
+            )
+            if !drawRect.intersects(dirtyRect) { return }
+            bullet.draw(at: drawRect.origin, withAttributes: attrs)
         }
     }
 }
@@ -462,6 +556,35 @@ enum SyntaxHighlighter {
                       cursorRange: NSRange) {
         let str = storage.string
 
+        // 0. HTML comments — hidden in rendered mode (multi-line capable)
+        enumerate(#"<!--[\s\S]*?-->"#,
+                  in: str, range: range,
+                  options: [.dotMatchesLineSeparators]) { m in
+            // Per-line: collapse each line's chars; newlines will leave their own height.
+            // For block comments on their own line, also kill the paragraph spacing.
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
+            let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
+            storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: m.range)
+
+            // If the comment occupies an entire line by itself, collapse that line's height.
+            let nsStr = str as NSString
+            let lineRange = nsStr.lineRange(for: m.range)
+            // Trim trailing newline for comparison
+            var trimmedLine = lineRange
+            if trimmedLine.length > 0 {
+                let last = nsStr.character(at: trimmedLine.location + trimmedLine.length - 1)
+                if last == 0x0A { trimmedLine.length -= 1 }
+            }
+            if trimmedLine.location == m.range.location && trimmedLine.length == m.range.length {
+                let para = NSMutableParagraphStyle()
+                para.maximumLineHeight = 0.01
+                para.minimumLineHeight = 0.01
+                para.paragraphSpacing = 0
+                para.paragraphSpacingBefore = 0
+                storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
+            }
+        }
+
         // 1. Frontmatter
         enumerate(#"\A---[ \t]*\n(.*?)\n---[ \t]*$"#,
                   in: str, range: range,
@@ -492,24 +615,30 @@ enum SyntaxHighlighter {
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
         }
 
-        // 4. Blockquote — paragraph indent + subtle background
+        // 4. Blockquote — left bar + box bg drawn by view; > markers hidden
         enumerate(#"^>\s?.*$"#, in: str, range: range, options: .anchorsMatchLines) { m in
             let para = NSMutableParagraphStyle()
-            para.firstLineHeadIndent = 4
-            para.headIndent = 18
+            para.firstLineHeadIndent = 14
+            para.headIndent = 14
             storage.addAttribute(.paragraphStyle, value: para, range: m.range)
-            storage.addAttribute(.backgroundColor,
-                                 value: palette.blockquoteBackground, range: m.range)
-            let lineString = (str as NSString).substring(with: m.range)
-            if lineString.hasPrefix(">") {
-                let markerRange = NSRange(location: m.range.location, length: 1)
-                storage.addAttribute(.foregroundColor,
-                                     value: palette.secondaryColor, range: markerRange)
+            storage.addAttribute(.mtdQuote, value: true, range: m.range)
+            storage.addAttribute(.mtdQuoteBG, value: palette.blockquoteBackground, range: m.range)
+            storage.addAttribute(.mtdQuoteBar, value: palette.secondaryColor, range: m.range)
+            // Hide the leading > and (optional) following space
+            let lineNS = (str as NSString).substring(with: m.range)
+            if lineNS.hasPrefix(">") {
+                var hideLen = 1
+                if lineNS.count >= 2, lineNS[lineNS.index(lineNS.startIndex, offsetBy: 1)] == " " {
+                    hideLen = 2
+                }
+                hideRange(storage,
+                          range: NSRange(location: m.range.location, length: hideLen),
+                          in: bodyFont)
             }
         }
 
-        // 5. Lists — paragraph hanging indent + colored marker
-        enumerate(#"^([ \t]*)([-*+]|\d+\.)([ \t]+)"#,
+        // 5. Lists — bullet markers (-, *, +) drawn as •; numbered (1.) keeps source text
+        enumerate(#"^([ \t]*)([-*+])([ \t]+)"#,
                   in: str, range: range, options: .anchorsMatchLines) { m in
             let lineRange = (str as NSString).lineRange(for: m.range)
             let para = NSMutableParagraphStyle()
@@ -517,7 +646,20 @@ enum SyntaxHighlighter {
             para.headIndent = 22
             storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
             let marker = m.range(at: 2)
-            storage.addAttribute(.foregroundColor, value: palette.markerColor, range: marker)
+            // Hide the source - / * / +; the view paints a • at this position
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: marker)
+            storage.addAttribute(.mtdBullet, value: true, range: marker)
+            storage.addAttribute(.mtdBulletColor, value: palette.secondaryColor, range: marker)
+        }
+        enumerate(#"^([ \t]*)(\d+\.)([ \t]+)"#,
+                  in: str, range: range, options: .anchorsMatchLines) { m in
+            let lineRange = (str as NSString).lineRange(for: m.range)
+            let para = NSMutableParagraphStyle()
+            para.firstLineHeadIndent = 0
+            para.headIndent = 22
+            storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
+            let marker = m.range(at: 2)
+            storage.addAttribute(.foregroundColor, value: palette.secondaryColor, range: marker)
         }
 
         // 6. ATX headings — applies size + bold to whole line; #'s hide when cursor off line
