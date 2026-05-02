@@ -528,9 +528,9 @@ final class ReadingTextView: NSTextView {
 
     var onCommentTap: ((Int) -> Void)?
 
-    private let marginIconSize: CGFloat = 16
-    private let marginIconRightInset: CGFloat = 6
-    private let marginIconReserve: CGFloat = 32   // right-side reserved area for comment icons
+    private let marginIconSize: CGFloat = 22
+    private let marginIconRightInset: CGFloat = 8
+    private let marginIconReserve: CGFloat = 44   // right-side reserved area for comment icons
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -598,9 +598,8 @@ final class ReadingTextView: NSTextView {
               let storage = textStorage else { return nil }
         let origin = textContainerOrigin
         let rightX = origin.x + tc.size.width
-        // Quick reject: must be in the reserved right margin band
-        if point.x < rightX + marginIconRightInset - 6
-            || point.x > rightX + marginIconRightInset + marginIconSize + 6 { return nil }
+        // Quick reject: must be in the reserved right margin band (generous bounds)
+        if point.x < rightX || point.x > rightX + marginIconReserve + 8 { return nil }
 
         let full = NSRange(location: 0, length: storage.length)
         var found: Int? = nil
@@ -608,8 +607,14 @@ final class ReadingTextView: NSTextView {
             guard (value as? Bool) == true else { return }
             let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
             let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
-            let iconRect = marginIconRect(for: bounding, origin: origin)
-            if iconRect.insetBy(dx: -3, dy: -3).contains(point) {
+            // Use the icon's full LINE band as the hit area — easier to click.
+            let lineBand = NSRect(
+                x: rightX,
+                y: origin.y + bounding.minY,
+                width: marginIconReserve + 8,
+                height: max(bounding.height, marginIconSize + 4)
+            )
+            if lineBand.contains(point) {
                 if let loc = storage.attribute(.mtdCommentLocation,
                                                at: attrRange.location,
                                                effectiveRange: nil) as? Int {
