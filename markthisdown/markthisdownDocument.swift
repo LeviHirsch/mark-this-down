@@ -1,35 +1,28 @@
-//
-//  markthisdownDocument.swift
-//  markthisdown
-//
-//  Created by Levi on 5/1/26.
-//
-
 import SwiftUI
 import UniformTypeIdentifiers
 
-nonisolated struct markthisdownDocument: FileDocument {
+nonisolated struct MarkdownDocument: FileDocument {
     var text: String
 
-    init(text: String = "Hello, world!") {
+    init(text: String = "") {
         self.text = text
     }
 
-    static let readableContentTypes = [
-        UTType(importedAs: "com.example.plain-text")
-    ]
+    static let markdownType = UTType(importedAs: "net.daringfireball.markdown",
+                                     conformingTo: .plainText)
+
+    static let readableContentTypes: [UTType] = [markdownType, .plainText]
+    static let writableContentTypes: [UTType] = [markdownType]
 
     init(configuration: ReadConfiguration) throws {
         guard let data = configuration.file.regularFileContents,
-              let string = String(data: data, encoding: .utf8)
-        else {
+              let string = String(data: data, encoding: .utf8) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         text = string
     }
-    
+
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = text.data(using: .utf8)!
-        return .init(regularFileWithContents: data)
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
