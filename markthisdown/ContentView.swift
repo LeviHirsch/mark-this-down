@@ -453,10 +453,7 @@ struct CommentCard: View {
                 .help("Delete comment")
             }
 
-            TextField("Comment", text: $editingBody, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...12)
-                .focused($bodyFocused)
+            commentEditor
 
             if !comment.contextLine.isEmpty {
                 Text(comment.contextLine)
@@ -481,26 +478,44 @@ struct CommentCard: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
-        // Sync local editing state from the parsed comment when card mounts.
         .onAppear { editingBody = comment.body }
-        // External changes (e.g. user edits in raw mode) — sync only if not editing.
         .onChange(of: comment.body) { _, newBody in
             if !bodyFocused { editingBody = newBody }
         }
-        // When parent focus state changes, update local TextField focus.
         .onChange(of: isFocused) { _, focused in
             if focused { bodyFocused = true }
         }
-        // When TextField focus changes, sync card focus and commit on blur.
         .onChange(of: bodyFocused) { _, focused in
             if focused {
-                onTap()    // tells parent: this card is now active
-            } else {
-                if editingBody != comment.body {
-                    onUpdate(editingBody)
-                }
+                onTap()
+            } else if editingBody != comment.body {
+                onUpdate(editingBody)
             }
         }
+    }
+
+    @ViewBuilder
+    private var commentEditor: some View {
+        TextField("Comment", text: $editingBody, axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(1...12)
+            .focused($bodyFocused)
+            .onKeyPress { press in
+                switch press.key {
+                case .return:
+                    if press.modifiers.contains(.shift) || press.modifiers.contains(.command) {
+                        return .ignored
+                    }
+                    bodyFocused = false
+                    return .handled
+                case .escape:
+                    editingBody = comment.body
+                    bodyFocused = false
+                    return .handled
+                default:
+                    return .ignored
+                }
+            }
     }
 }
 
@@ -801,8 +816,24 @@ final class ReadingTextView: NSTextView {
 
     private func computeCommentInsertion(in text: String, selection: NSRange) -> InsertionPlan {
         let nsText = text as NSString
-        // Empty selection → inline at cursor
+
+        // Empty selection
         if selection.length == 0 {
+            let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
+            let lineText = nsText.substring(with: lineRange)
+                .trimmingCharacters(in: CharacterSet.newlines)
+            // Block-above behavior when cursor is on a structural line:
+            //   #  (heading), -/*/+ (list), > (quote), 1. (numbered)
+            let structuralPattern = #"^[ \t]*(#{1,6}\s|[-*+]\s|>\s?|\d+\.\s)"#
+            if lineText.range(of: structuralPattern, options: .regularExpression) != nil {
+                let template = "<!--  -->\n"
+                return InsertionPlan(
+                    insertion: template,
+                    insertion_location: lineRange.location,
+                    cursor_location: lineRange.location + 5
+                )
+            }
+            // Otherwise inline at cursor (works for blank lines too — looks the same as block)
             let template = "<!--  -->"
             return InsertionPlan(
                 insertion: template,
@@ -810,9 +841,9 @@ final class ReadingTextView: NSTextView {
                 cursor_location: selection.location + 5
             )
         }
+
         let selText = nsText.substring(with: selection)
         if selText.contains("\n") {
-            // Block: comment on own line BEFORE selection's first line
             let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
             let template = "<!--  -->\n"
             return InsertionPlan(
@@ -820,16 +851,14 @@ final class ReadingTextView: NSTextView {
                 insertion_location: lineRange.location,
                 cursor_location: lineRange.location + 5
             )
-        } else {
-            // Inline: after selection
-            let after = NSMaxRange(selection)
-            let template = " <!--  -->"
-            return InsertionPlan(
-                insertion: template,
-                insertion_location: after,
-                cursor_location: after + 6
-            )
         }
+        let after = NSMaxRange(selection)
+        let template = " <!--  -->"
+        return InsertionPlan(
+            insertion: template,
+            insertion_location: after,
+            cursor_location: after + 6
+        )
     }
 }
 
@@ -1116,28 +1145,13 @@ enum SyntaxHighlighter {
             }
         }
 
-        // 0. Hide HTML comments in rendered mode (skip ranges inside code fences handled at parse step)
+        // 0. Hide HTML comments in rendered mode. Line height stays normal so a
+        //    standalone block comment shows as a regular blank line in render.
         for r in commentRanges {
             guard NSMaxRange(r) <= range.length else { continue }
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: r)
             let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
             storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: r)
-
-            let nsStr = str as NSString
-            let lineRange = nsStr.lineRange(for: r)
-            var trimmedLine = lineRange
-            if trimmedLine.length > 0 {
-                let last = nsStr.character(at: trimmedLine.location + trimmedLine.length - 1)
-                if last == 0x0A { trimmedLine.length -= 1 }
-            }
-            if trimmedLine.location == r.location && trimmedLine.length == r.length {
-                let para = NSMutableParagraphStyle()
-                para.maximumLineHeight = 0.01
-                para.minimumLineHeight = 0.01
-                para.paragraphSpacing = 0
-                para.paragraphSpacingBefore = 0
-                storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
-            }
         }
 
         // 1. Frontmatter
