@@ -1,134 +1,56 @@
 import SwiftUI
 
-// MARK: - Theme palette
+// MARK: - Theme
 
 struct ThemePalette {
     let background: NSColor
     let bodyColor: NSColor
-    let bodyFont: NSFont
-    let headingSizes: [CGFloat]      // h1...h6
-    let headingColor: NSColor
+    let secondaryColor: NSColor
     let markerColor: NSColor
     let linkColor: NSColor
-    let codeFont: NSFont
     let codeBackground: NSColor
     let codeFenceColor: NSColor
-    let blockquoteColor: NSColor
     let blockquoteBackground: NSColor
     let hrColor: NSColor
     let frontmatterColor: NSColor
+
+    let renderedBodyFont: NSFont
+    let rawBodyFont: NSFont
+    let codeFont: NSFont
+    let headingSizes: [CGFloat]   // h1...h6
+
     let isDark: Bool
 }
 
 enum AppTheme: String, CaseIterable, Identifiable {
-    case system
-    case darkClassic
-    case lightClassic
-    case github
-    case retroMono
+    case system, light, dark
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .system:        return "Follow System"
-        case .darkClassic:   return "Default Dark"
-        case .lightClassic:  return "Default Light"
-        case .github:        return "GitHub"
-        case .retroMono:     return "Retro Mono"
+        case .system: return "Follow System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
         }
     }
 
     var preferredColorScheme: ColorScheme? {
         switch self {
-        case .system:                        return nil
-        case .darkClassic, .retroMono:       return .dark
-        case .lightClassic, .github:         return .light
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
         }
     }
 
     func palette(systemIsDark: Bool) -> ThemePalette {
+        let dark: Bool
         switch self {
-        case .system:
-            return (systemIsDark ? AppTheme.darkClassic : AppTheme.lightClassic)
-                .palette(systemIsDark: systemIsDark)
-
-        case .darkClassic:
-            return ThemePalette(
-                background: NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.13, alpha: 1),
-                bodyColor: NSColor(white: 0.92, alpha: 1),
-                bodyFont: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                headingSizes: [26, 22, 19, 17, 15, 14],
-                headingColor: NSColor(white: 0.97, alpha: 1),
-                markerColor: NSColor(white: 0.45, alpha: 1),
-                linkColor: NSColor(calibratedRed: 0.42, green: 0.74, blue: 1.0, alpha: 1),
-                codeFont: NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular),
-                codeBackground: NSColor(white: 1.0, alpha: 0.07),
-                codeFenceColor: NSColor(white: 0.55, alpha: 1),
-                blockquoteColor: NSColor(white: 0.7, alpha: 1),
-                blockquoteBackground: NSColor(white: 1.0, alpha: 0.05),
-                hrColor: NSColor(white: 0.4, alpha: 1),
-                frontmatterColor: NSColor(white: 0.55, alpha: 1),
-                isDark: true
-            )
-
-        case .lightClassic:
-            return ThemePalette(
-                background: NSColor.white,
-                bodyColor: NSColor(white: 0.13, alpha: 1),
-                bodyFont: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                headingSizes: [26, 22, 19, 17, 15, 14],
-                headingColor: NSColor.black,
-                markerColor: NSColor(white: 0.65, alpha: 1),
-                linkColor: NSColor(calibratedRed: 0.0, green: 0.42, blue: 0.93, alpha: 1),
-                codeFont: NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular),
-                codeBackground: NSColor(white: 0.0, alpha: 0.05),
-                codeFenceColor: NSColor(white: 0.45, alpha: 1),
-                blockquoteColor: NSColor(white: 0.35, alpha: 1),
-                blockquoteBackground: NSColor(white: 0.0, alpha: 0.04),
-                hrColor: NSColor(white: 0.7, alpha: 1),
-                frontmatterColor: NSColor(white: 0.45, alpha: 1),
-                isDark: false
-            )
-
-        case .github:
-            return ThemePalette(
-                background: NSColor.white,
-                bodyColor: NSColor(calibratedRed: 0.13, green: 0.13, blue: 0.14, alpha: 1),
-                bodyFont: NSFont.systemFont(ofSize: 15, weight: .regular),
-                headingSizes: [30, 24, 20, 17, 15, 13],
-                headingColor: NSColor(calibratedRed: 0.07, green: 0.09, blue: 0.12, alpha: 1),
-                markerColor: NSColor(calibratedRed: 0.55, green: 0.6, blue: 0.66, alpha: 1),
-                linkColor: NSColor(calibratedRed: 0.04, green: 0.36, blue: 0.79, alpha: 1),
-                codeFont: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-                codeBackground: NSColor(calibratedRed: 0.95, green: 0.96, blue: 0.97, alpha: 1),
-                codeFenceColor: NSColor(calibratedRed: 0.4, green: 0.45, blue: 0.5, alpha: 1),
-                blockquoteColor: NSColor(calibratedRed: 0.42, green: 0.46, blue: 0.51, alpha: 1),
-                blockquoteBackground: NSColor(calibratedRed: 0.95, green: 0.96, blue: 0.97, alpha: 1),
-                hrColor: NSColor(calibratedRed: 0.84, green: 0.86, blue: 0.89, alpha: 1),
-                frontmatterColor: NSColor(calibratedRed: 0.4, green: 0.45, blue: 0.5, alpha: 1),
-                isDark: false
-            )
-
-        case .retroMono:
-            return ThemePalette(
-                background: NSColor(calibratedRed: 0.06, green: 0.06, blue: 0.05, alpha: 1),
-                bodyColor: NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.4, alpha: 1),
-                bodyFont: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                headingSizes: [22, 20, 18, 16, 15, 14],
-                headingColor: NSColor(calibratedRed: 1.0, green: 0.86, blue: 0.55, alpha: 1),
-                markerColor: NSColor(calibratedRed: 0.55, green: 0.4, blue: 0.2, alpha: 1),
-                linkColor: NSColor(calibratedRed: 0.6, green: 0.95, blue: 0.95, alpha: 1),
-                codeFont: NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular),
-                codeBackground: NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.4, alpha: 0.10),
-                codeFenceColor: NSColor(calibratedRed: 0.6, green: 0.45, blue: 0.25, alpha: 1),
-                blockquoteColor: NSColor(calibratedRed: 0.85, green: 0.65, blue: 0.3, alpha: 1),
-                blockquoteBackground: NSColor(calibratedRed: 1.0, green: 0.78, blue: 0.4, alpha: 0.07),
-                hrColor: NSColor(calibratedRed: 0.55, green: 0.4, blue: 0.2, alpha: 1),
-                frontmatterColor: NSColor(calibratedRed: 0.65, green: 0.5, blue: 0.25, alpha: 1),
-                isDark: true
-            )
+        case .system: dark = systemIsDark
+        case .light:  dark = false
+        case .dark:   dark = true
         }
+        return dark ? Self.darkPalette : Self.lightPalette
     }
 
     var next: AppTheme {
@@ -136,6 +58,47 @@ enum AppTheme: String, CaseIterable, Identifiable {
         let i = all.firstIndex(of: self) ?? 0
         return all[(i + 1) % all.count]
     }
+
+    private static let renderedBody = NSFont.systemFont(ofSize: 15, weight: .regular)
+    private static let rawBody = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+    private static let codeFont = NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular)
+    private static let headingSizes: [CGFloat] = [28, 24, 20, 18, 16, 15]
+
+    static let lightPalette = ThemePalette(
+        background: NSColor.white,
+        bodyColor: NSColor(white: 0.13, alpha: 1),
+        secondaryColor: NSColor(white: 0.40, alpha: 1),
+        markerColor: NSColor(white: 0.70, alpha: 1),
+        linkColor: NSColor(calibratedRed: 0.0, green: 0.42, blue: 0.93, alpha: 1),
+        codeBackground: NSColor(white: 0.0, alpha: 0.05),
+        codeFenceColor: NSColor(white: 0.55, alpha: 1),
+        blockquoteBackground: NSColor(white: 0.0, alpha: 0.04),
+        hrColor: NSColor(white: 0.78, alpha: 1),
+        frontmatterColor: NSColor(white: 0.50, alpha: 1),
+        renderedBodyFont: renderedBody,
+        rawBodyFont: rawBody,
+        codeFont: codeFont,
+        headingSizes: headingSizes,
+        isDark: false
+    )
+
+    static let darkPalette = ThemePalette(
+        background: NSColor(calibratedRed: 0.13, green: 0.13, blue: 0.14, alpha: 1),
+        bodyColor: NSColor(white: 0.92, alpha: 1),
+        secondaryColor: NSColor(white: 0.65, alpha: 1),
+        markerColor: NSColor(white: 0.45, alpha: 1),
+        linkColor: NSColor(calibratedRed: 0.42, green: 0.74, blue: 1.0, alpha: 1),
+        codeBackground: NSColor(white: 1.0, alpha: 0.06),
+        codeFenceColor: NSColor(white: 0.55, alpha: 1),
+        blockquoteBackground: NSColor(white: 1.0, alpha: 0.04),
+        hrColor: NSColor(white: 0.40, alpha: 1),
+        frontmatterColor: NSColor(white: 0.55, alpha: 1),
+        renderedBodyFont: renderedBody,
+        rawBodyFont: rawBody,
+        codeFont: codeFont,
+        headingSizes: headingSizes,
+        isDark: true
+    )
 }
 
 // MARK: - App
@@ -143,10 +106,9 @@ enum AppTheme: String, CaseIterable, Identifiable {
 @main
 struct MarkThisDownApp: App {
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
+    @AppStorage("fontScale") private var fontScale: Double = 1.0
 
-    private var theme: AppTheme {
-        AppTheme(rawValue: themeRaw) ?? .system
-    }
+    private var theme: AppTheme { AppTheme(rawValue: themeRaw) ?? .system }
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { file in
@@ -172,6 +134,23 @@ struct MarkThisDownApp: App {
                 Button("Insert Frontmatter") {
                     NotificationCenter.default.post(name: .mtdInsertFrontmatter, object: nil)
                 }
+
+                Divider()
+
+                Button("Zoom In") {
+                    fontScale = min(2.5, fontScale * 1.10)
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Zoom Out") {
+                    fontScale = max(0.6, fontScale / 1.10)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Actual Size") {
+                    fontScale = 1.0
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
         }
     }
