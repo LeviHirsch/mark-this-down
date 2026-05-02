@@ -394,15 +394,7 @@ struct CommentsSidebar: View {
     private func deleteComment(_ comment: MTDComment) {
         let nsText = documentText as NSString
         guard NSMaxRange(comment.range) <= nsText.length else { return }
-        var deleteRange = comment.range
-        // also eat a trailing newline if comment owns its line
-        let lineRange = nsText.lineRange(for: NSRange(location: comment.range.location, length: 0))
-        if lineRange.location == comment.range.location
-            && NSMaxRange(lineRange) == NSMaxRange(comment.range) + 1
-        {
-            deleteRange = NSRange(location: lineRange.location, length: lineRange.length)
-        }
-        documentText = nsText.replacingCharacters(in: deleteRange, with: "")
+        documentText = nsText.replacingCharacters(in: comment.range, with: "")
         focusedCommentLocation = nil
     }
 }
@@ -454,6 +446,21 @@ struct CommentCard: View {
             }
 
             commentEditor
+                .background(
+                    // Hidden Esc-handler. .cancelAction binds Esc; running buttons run only
+                    // when this view's window contains the responder.
+                    Group {
+                        if bodyFocused {
+                            Button("") {
+                                editingBody = comment.body
+                                bodyFocused = false
+                            }
+                            .keyboardShortcut(.cancelAction)
+                            .opacity(0)
+                            .frame(width: 0, height: 0)
+                        }
+                    }
+                )
 
             if !comment.contextLine.isEmpty {
                 Text(comment.contextLine)
@@ -501,20 +508,13 @@ struct CommentCard: View {
             .lineLimit(1...12)
             .focused($bodyFocused)
             .onKeyPress { press in
-                switch press.key {
-                case .return:
-                    if press.modifiers.contains(.shift) || press.modifiers.contains(.command) {
-                        return .ignored
-                    }
+                if press.key == .return,
+                   !press.modifiers.contains(.shift),
+                   !press.modifiers.contains(.command) {
                     bodyFocused = false
                     return .handled
-                case .escape:
-                    editingBody = comment.body
-                    bodyFocused = false
-                    return .handled
-                default:
-                    return .ignored
                 }
+                return .ignored
             }
     }
 }
@@ -748,11 +748,13 @@ final class ReadingTextView: NSTextView {
         let origin = textContainerOrigin
         guard let baseSymbol = NSImage(systemSymbolName: "text.bubble",
                                         accessibilityDescription: nil) else { return }
-        let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
-        let configured = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
-        configured.isTemplate = true
 
-        let tintColor = NSColor.secondaryLabelColor
+        let tintColor = NSColor.secondaryLabelColor.usingColorSpace(.sRGB)
+            ?? NSColor.secondaryLabelColor
+        let sizeCfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
+        let paletteCfg = NSImage.SymbolConfiguration(paletteColors: [tintColor])
+        let configured = baseSymbol
+            .withSymbolConfiguration(sizeCfg.applying(paletteCfg)) ?? baseSymbol
 
         var seenY: Set<Int> = []
         let fullRange = NSRange(location: 0, length: storage.length)
@@ -765,15 +767,7 @@ final class ReadingTextView: NSTextView {
             seenY.insert(key)
             let iconRect = marginIconRect(for: bounding, origin: origin)
             if !iconRect.intersects(dirtyRect) { return }
-
-            // Draw tinted template image: lockFocus + sourceAtop fill.
-            let tinted = NSImage(size: configured.size, flipped: false) { rect in
-                configured.draw(in: rect)
-                tintColor.set()
-                rect.fill(using: .sourceAtop)
-                return true
-            }
-            tinted.draw(in: iconRect)
+            configured.draw(in: iconRect)
         }
     }
 
@@ -1145,13 +1139,30 @@ enum SyntaxHighlighter {
             }
         }
 
-        // 0. Hide HTML comments in rendered mode. Line height stays normal so a
-        //    standalone block comment shows as a regular blank line in render.
+        // 0. Hide HTML comments in rendered mode. If a comment fully owns its line
+        //    (no other text on the line), collapse the line's height so it doesn't
+        //    leave a visible blank in render.
         for r in commentRanges {
             guard NSMaxRange(r) <= range.length else { continue }
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: r)
             let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
             storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: r)
+
+            let nsStr = str as NSString
+            let lineRange = nsStr.lineRange(for: r)
+            var trimmed = lineRange
+            if trimmed.length > 0 {
+                let last = nsStr.character(at: trimmed.location + trimmed.length - 1)
+                if last == 0x0A { trimmed.length -= 1 }
+            }
+            if trimmed.location == r.location && trimmed.length == r.length {
+                let para = NSMutableParagraphStyle()
+                para.maximumLineHeight = 0.01
+                para.minimumLineHeight = 0.01
+                para.paragraphSpacing = 0
+                para.paragraphSpacingBefore = 0
+                storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
+            }
         }
 
         // 1. Frontmatter
