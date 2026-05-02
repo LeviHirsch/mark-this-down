@@ -746,28 +746,39 @@ final class ReadingTextView: NSTextView {
               let tc = textContainer,
               let storage = textStorage else { return }
         let origin = textContainerOrigin
-        guard let baseSymbol = NSImage(systemSymbolName: "text.bubble",
-                                        accessibilityDescription: nil) else { return }
 
-        let tintColor = NSColor.secondaryLabelColor.usingColorSpace(.sRGB)
-            ?? NSColor.secondaryLabelColor
-        let sizeCfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
-        let paletteCfg = NSImage.SymbolConfiguration(paletteColors: [tintColor])
-        let configured = baseSymbol
-            .withSymbolConfiguration(sizeCfg.applying(paletteCfg)) ?? baseSymbol
+        guard let baseSymbol = NSImage(systemSymbolName: "text.bubble",
+                                       accessibilityDescription: nil) else { return }
+        let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
+        let configured = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
+        configured.isTemplate = true
+
+        let tint = NSColor.secondaryLabelColor
 
         var seenY: Set<Int> = []
         let fullRange = NSRange(location: 0, length: storage.length)
         storage.enumerateAttribute(.mtdComment, in: fullRange) { value, attrRange, _ in
             guard (value as? Bool) == true else { return }
-            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange,
+                                           actualCharacterRange: nil)
             let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
             let key = Int((origin.y + bounding.minY).rounded())
             if seenY.contains(key) { return }
             seenY.insert(key)
             let iconRect = marginIconRect(for: bounding, origin: origin)
-            if !iconRect.intersects(dirtyRect) { return }
-            configured.draw(in: iconRect)
+            // (no dirtyRect intersection check — paranoid full redraw)
+
+            // Tint a template SF Symbol via lockFocus + sourceAtop fill.
+            let drawn = NSImage(size: configured.size)
+            drawn.lockFocus()
+            configured.draw(at: .zero, from: .zero,
+                            operation: .sourceOver, fraction: 1.0)
+            tint.set()
+            NSRect(origin: .zero, size: configured.size).fill(using: .sourceAtop)
+            drawn.unlockFocus()
+            drawn.draw(in: iconRect, from: .zero,
+                       operation: .sourceOver, fraction: 1.0,
+                       respectFlipped: true, hints: nil)
         }
     }
 
