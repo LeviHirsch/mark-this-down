@@ -585,11 +585,39 @@ final class ReadingTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let pointInView = convert(event.locationInWindow, from: nil)
+        NSLog("[MTD] mouseDown at \(pointInView)")
+        // First: precise hit on a comment icon → focus that comment
         if let location = commentLocationForMarginIcon(at: pointInView) {
+            NSLog("[MTD] hit icon for comment at \(location)")
             onCommentTap?(location)
             return
         }
+        // DEBUG: any click in right margin reserve band → open sidebar with first comment
+        if let tc = textContainer {
+            let rightX = textContainerOrigin.x + tc.size.width
+            if pointInView.x >= rightX, pointInView.x <= rightX + marginIconReserve + 12 {
+                NSLog("[MTD] right-margin click — fallback open sidebar")
+                if let storage = textStorage {
+                    let full = NSRange(location: 0, length: storage.length)
+                    var firstLoc: Int? = nil
+                    storage.enumerateAttribute(.mtdCommentLocation, in: full) { v, _, stop in
+                        if let i = v as? Int { firstLoc = i; stop.pointee = true }
+                    }
+                    if let loc = firstLoc {
+                        onCommentTap?(loc)
+                        return
+                    }
+                }
+            }
+        }
         super.mouseDown(with: event)
+    }
+
+    // Force-claim hit-tests in our bounds so right-margin clicks reach mouseDown.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        if bounds.contains(local) { return self }
+        return super.hitTest(point)
     }
 
     private func commentLocationForMarginIcon(at point: NSPoint) -> Int? {
@@ -1091,6 +1119,10 @@ struct MarkdownEditor: NSViewRepresentable {
             let codeFont = parent.scaled(parent.palette.codeFont)
             let scale = max(0.5, min(3.0, parent.scale))
 
+            // Save scroll position; layout invalidation from setAttributes can
+            // nudge the visible area otherwise.
+            let savedScroll = tv.enclosingScrollView?.contentView.bounds.origin
+
             storage.beginEditing()
             storage.setAttributes([
                 .font: bodyFont,
@@ -1124,6 +1156,14 @@ struct MarkdownEditor: NSViewRepresentable {
                 .foregroundColor: parent.palette.bodyColor
             ]
             tv.needsDisplay = true
+
+            // Restore scroll position so re-highlight doesn't visually shift the doc.
+            if let savedScroll, let clip = tv.enclosingScrollView?.contentView {
+                if clip.bounds.origin != savedScroll {
+                    clip.setBoundsOrigin(savedScroll)
+                    tv.enclosingScrollView?.reflectScrolledClipView(clip)
+                }
+            }
         }
     }
 }
