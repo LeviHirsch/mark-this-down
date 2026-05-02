@@ -573,7 +573,12 @@ final class ReadingTextView: NSTextView {
         drawHorizontalRules(in: dirtyRect)
         drawQuoteBars(in: dirtyRect)
         drawBullets(in: dirtyRect)
+
+        // Margin icons live OUTSIDE the textContainer clip — expand to full bounds.
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds).setClip()
         drawCommentMarginIcons(in: dirtyRect)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     // MARK: - Mouse handling for margin icon click
@@ -749,11 +754,11 @@ final class ReadingTextView: NSTextView {
 
         guard let baseSymbol = NSImage(systemSymbolName: "text.bubble",
                                        accessibilityDescription: nil) else { return }
+        let tint = NSColor.secondaryLabelColor.usingColorSpace(.sRGB)
+            ?? NSColor.secondaryLabelColor
         let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
         let configured = baseSymbol.withSymbolConfiguration(cfg) ?? baseSymbol
-        configured.isTemplate = true
-
-        let tint = NSColor.secondaryLabelColor
 
         var seenY: Set<Int> = []
         let fullRange = NSRange(location: 0, length: storage.length)
@@ -766,19 +771,9 @@ final class ReadingTextView: NSTextView {
             if seenY.contains(key) { return }
             seenY.insert(key)
             let iconRect = marginIconRect(for: bounding, origin: origin)
-            // (no dirtyRect intersection check — paranoid full redraw)
-
-            // Tint a template SF Symbol via lockFocus + sourceAtop fill.
-            let drawn = NSImage(size: configured.size)
-            drawn.lockFocus()
-            configured.draw(at: .zero, from: .zero,
-                            operation: .sourceOver, fraction: 1.0)
-            tint.set()
-            NSRect(origin: .zero, size: configured.size).fill(using: .sourceAtop)
-            drawn.unlockFocus()
-            drawn.draw(in: iconRect, from: .zero,
-                       operation: .sourceOver, fraction: 1.0,
-                       respectFlipped: true, hints: nil)
+            configured.draw(in: iconRect, from: .zero,
+                            operation: .sourceOver, fraction: 1.0,
+                            respectFlipped: true, hints: nil)
         }
     }
 
