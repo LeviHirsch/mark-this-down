@@ -4,7 +4,6 @@ import AppKit
 enum DisplayMode { case rendered, raw }
 enum SaveState { case untitled, autosaving, saved }
 
-// Custom attribute keys
 extension NSAttributedString.Key {
     static let mtdHR = NSAttributedString.Key("mtdHR")
     static let mtdHRColor = NSAttributedString.Key("mtdHRColor")
@@ -13,11 +12,83 @@ extension NSAttributedString.Key {
     static let mtdQuoteBar = NSAttributedString.Key("mtdQuoteBar")
     static let mtdBullet = NSAttributedString.Key("mtdBullet")
     static let mtdBulletColor = NSAttributedString.Key("mtdBulletColor")
+    static let mtdComment = NSAttributedString.Key("mtdComment")
+    static let mtdCommentLocation = NSAttributedString.Key("mtdCommentLocation")
 }
 
 private var appVersion: String {
     let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     return "v\(v)"
+}
+
+// MARK: - Comment model
+
+struct MTDComment: Identifiable, Equatable {
+    let id: Int           // range.location, stable within a single parse cycle
+    let range: NSRange    // includes <!-- and -->
+    let body: String      // inner text, trimmed
+    let lineNumber: Int
+    let contextLine: String
+
+    static func parse(_ text: String) -> [MTDComment] {
+        let nsText = text as NSString
+        let fenceRanges = findFenceRanges(text)
+        guard let re = try? NSRegularExpression(
+            pattern: "<!--[\\s\\S]*?-->",
+            options: []
+        ) else { return [] }
+
+        var results: [MTDComment] = []
+        let full = NSRange(location: 0, length: nsText.length)
+        re.enumerateMatches(in: text, range: full) { match, _, _ in
+            guard let m = match else { return }
+            // skip if inside a code fence
+            if fenceRanges.contains(where: { NSLocationInRange(m.range.location, $0) }) {
+                return
+            }
+            let raw = nsText.substring(with: m.range)
+            // body = strip leading <!-- and trailing -->
+            var body = String(raw.dropFirst(4).dropLast(3))
+            body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lineRange = nsText.lineRange(for: NSRange(location: m.range.location, length: 0))
+            let lineNumber = lineNumberFor(location: m.range.location, in: nsText)
+            var context = nsText.substring(with: lineRange)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if context.count > 80 { context = String(context.prefix(78)) + "…" }
+            results.append(MTDComment(
+                id: m.range.location,
+                range: m.range,
+                body: body,
+                lineNumber: lineNumber,
+                contextLine: context
+            ))
+        }
+        return results
+    }
+
+    private static func findFenceRanges(_ text: String) -> [NSRange] {
+        guard let re = try? NSRegularExpression(
+            pattern: #"^```[\s\S]*?^```[ \t]*$"#,
+            options: [.anchorsMatchLines]
+        ) else { return [] }
+        let nsText = text as NSString
+        let full = NSRange(location: 0, length: nsText.length)
+        var ranges: [NSRange] = []
+        re.enumerateMatches(in: text, range: full) { m, _, _ in
+            if let m = m { ranges.append(m.range) }
+        }
+        return ranges
+    }
+
+    private static func lineNumberFor(location: Int, in nsText: NSString) -> Int {
+        var line = 1
+        var idx = 0
+        while idx < location {
+            if nsText.character(at: idx) == 0x0A { line += 1 }
+            idx += 1
+        }
+        return line
+    }
 }
 
 // MARK: - ContentView
@@ -30,6 +101,8 @@ struct ContentView: View {
     @State private var saveState: SaveState = .untitled
     @State private var debounceTask: Task<Void, Never>? = nil
     @State private var showHelp: Bool = false
+    @State private var showSidebar: Bool = false
+    @State private var focusedCommentLocation: Int? = nil
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("fontScale") private var fontScale: Double = 1.0
 
@@ -38,6 +111,10 @@ struct ContentView: View {
     private var theme: AppTheme { AppTheme(rawValue: themeRaw) ?? .system }
     private var palette: ThemePalette {
         theme.palette(systemIsDark: colorScheme == .dark)
+    }
+
+    private var comments: [MTDComment] {
+        MTDComment.parse(document.text)
     }
 
     private var statusText: String {
@@ -52,8 +129,22 @@ struct ContentView: View {
         MarkdownEditor(text: $document.text,
                        mode: mode,
                        palette: palette,
-                       scale: CGFloat(fontScale))
+                       scale: CGFloat(fontScale),
+                       commentRanges: comments.map { $0.range },
+                       onCommentTap: { location in
+                           focusedCommentLocation = location
+                           showSidebar = true
+                       })
             .navigationSubtitle(statusText)
+            .inspector(isPresented: $showSidebar) {
+                CommentsSidebar(
+                    documentText: $document.text,
+                    comments: comments,
+                    focusedCommentLocation: $focusedCommentLocation,
+                    onAddComment: triggerAddComment
+                )
+                .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
                     Button {
@@ -105,6 +196,20 @@ struct ContentView: View {
                         .onTapGesture(count: 2) { fontScale = 1.0 }
 
                     Button {
+                        triggerAddComment()
+                    } label: {
+                        Label("Add Comment", systemImage: "text.bubble")
+                    }
+                    .help("Add a comment at the cursor (⌘')")
+
+                    Button {
+                        showSidebar.toggle()
+                    } label: {
+                        Label("Comments", systemImage: "sidebar.right")
+                    }
+                    .help("Toggle comments sidebar (⌘\\)")
+
+                    Button {
                         insertFrontmatter()
                     } label: {
                         Label("Insert Frontmatter", systemImage: "text.badge.plus")
@@ -149,6 +254,15 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mtdInsertFrontmatter)) { _ in
                 insertFrontmatter()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .mtdToggleSidebar)) { _ in
+                showSidebar.toggle()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mtdCommentAdded)) { note in
+                if let loc = note.userInfo?["location"] as? Int {
+                    showSidebar = true
+                    focusedCommentLocation = loc
+                }
+            }
     }
 
     private var zoomLabel: String {
@@ -158,6 +272,10 @@ struct ContentView: View {
 
     private func recomputeStateForFileURL() {
         saveState = (fileURL == nil) ? .untitled : .saved
+    }
+
+    private func triggerAddComment() {
+        NSApp.sendAction(Selector(("mtdInsertCommentAction:")), to: nil, from: nil)
     }
 
     private func insertFrontmatter() {
@@ -179,12 +297,195 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Custom NSTextView with reading-width margins + HR drawing
+// MARK: - Comments Sidebar
+
+struct CommentsSidebar: View {
+    @Binding var documentText: String
+    let comments: [MTDComment]
+    @Binding var focusedCommentLocation: Int?
+    let onAddComment: () -> Void
+
+    @State private var searchText: String = ""
+
+    private var filtered: [MTDComment] {
+        if searchText.isEmpty { return comments }
+        return comments.filter {
+            $0.body.localizedCaseInsensitiveContains(searchText)
+                || $0.contextLine.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search", text: $searchText)
+                    .textFieldStyle(.plain)
+                Button(action: onAddComment) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .help("Add comment at cursor (⌘')")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if filtered.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "text.bubble")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text(comments.isEmpty
+                         ? "No comments yet.\nPress ⌘' to add one."
+                         : "No comments match.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 6) {
+                            ForEach(filtered) { c in
+                                CommentCard(
+                                    comment: c,
+                                    isFocused: c.id == focusedCommentLocation,
+                                    onUpdate: { updateBody(of: c, to: $0) },
+                                    onDelete: { deleteComment(c) },
+                                    onTap: { focusedCommentLocation = c.id }
+                                )
+                                .id(c.id)
+                            }
+                        }
+                        .padding(8)
+                    }
+                    .onChange(of: focusedCommentLocation) { _, new in
+                        guard let new else { return }
+                        if filtered.contains(where: { $0.id == new }) {
+                            withAnimation { proxy.scrollTo(new, anchor: .center) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateBody(of comment: MTDComment, to newBody: String) {
+        let nsText = documentText as NSString
+        guard NSMaxRange(comment.range) <= nsText.length else { return }
+        let cleaned = newBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let replacement: String
+        if cleaned.isEmpty {
+            replacement = "<!--  -->"
+        } else if cleaned.contains("\n") {
+            replacement = "<!--\n\(cleaned)\n-->"
+        } else {
+            replacement = "<!-- \(cleaned) -->"
+        }
+        let updated = nsText.replacingCharacters(in: comment.range, with: replacement)
+        if updated != documentText { documentText = updated }
+    }
+
+    private func deleteComment(_ comment: MTDComment) {
+        let nsText = documentText as NSString
+        guard NSMaxRange(comment.range) <= nsText.length else { return }
+        var deleteRange = comment.range
+        // also eat a trailing newline if comment owns its line
+        let lineRange = nsText.lineRange(for: NSRange(location: comment.range.location, length: 0))
+        if lineRange.location == comment.range.location
+            && NSMaxRange(lineRange) == NSMaxRange(comment.range) + 1
+        {
+            deleteRange = NSRange(location: lineRange.location, length: lineRange.length)
+        }
+        documentText = nsText.replacingCharacters(in: deleteRange, with: "")
+        focusedCommentLocation = nil
+    }
+}
+
+// MARK: - Comment Card
+
+struct CommentCard: View {
+    let comment: MTDComment
+    let isFocused: Bool
+    let onUpdate: (String) -> Void
+    let onDelete: () -> Void
+    let onTap: () -> Void
+
+    @FocusState private var bodyFocused: Bool
+
+    private var bodyBinding: Binding<String> {
+        Binding(get: { comment.body }, set: { onUpdate($0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Line \(comment.lineNumber)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Delete comment")
+            }
+
+            TextField("Comment", text: bodyBinding, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...12)
+                .focused($bodyFocused)
+
+            if !comment.contextLine.isEmpty {
+                Text(comment.contextLine)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isFocused
+                      ? Color.accentColor.opacity(0.12)
+                      : Color.gray.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isFocused
+                        ? Color.accentColor.opacity(0.6)
+                        : Color.gray.opacity(0.18), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .onChange(of: isFocused) { _, focused in
+            if focused { bodyFocused = true }
+        }
+        .onAppear {
+            if isFocused { bodyFocused = true }
+        }
+    }
+}
+
+// MARK: - ReadingTextView
 
 final class ReadingTextView: NSTextView {
     var maxReadingWidth: CGFloat = 760
     var basePadding: CGFloat = 28
     var verticalPadding: CGFloat = 32
+
+    var onCommentTap: ((Int) -> Void)?
+
+    private let marginIconSize: CGFloat = 14
+    private let marginIconRightInset: CGFloat = 6
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
@@ -217,9 +518,61 @@ final class ReadingTextView: NSTextView {
         drawHorizontalRules(in: dirtyRect)
         drawQuoteBars(in: dirtyRect)
         drawBullets(in: dirtyRect)
+        drawCommentMarginIcons(in: dirtyRect)
     }
 
-    // MARK: drawing helpers
+    // MARK: - Mouse handling for margin icon click
+
+    override func mouseDown(with event: NSEvent) {
+        let pointInView = convert(event.locationInWindow, from: nil)
+        if let location = commentLocationForMarginIcon(at: pointInView) {
+            onCommentTap?(location)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func commentLocationForMarginIcon(at point: NSPoint) -> Int? {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return nil }
+        let origin = textContainerOrigin
+        let rightX = origin.x + tc.size.width
+        // Quick reject: must be in the right margin band
+        if point.x < rightX - marginIconSize - marginIconRightInset - 4
+            || point.x > rightX + marginIconSize { return nil }
+
+        let full = NSRange(location: 0, length: storage.length)
+        var found: Int? = nil
+        storage.enumerateAttribute(.mtdComment, in: full) { value, attrRange, stop in
+            guard (value as? Bool) == true else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let iconRect = marginIconRect(for: bounding, origin: origin)
+            if iconRect.insetBy(dx: -3, dy: -3).contains(point) {
+                if let loc = storage.attribute(.mtdCommentLocation,
+                                               at: attrRange.location,
+                                               effectiveRange: nil) as? Int {
+                    found = loc
+                }
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    private func marginIconRect(for bounding: NSRect, origin: NSPoint) -> NSRect {
+        let rightX = origin.x + (textContainer?.size.width ?? 0)
+        let cy = origin.y + bounding.midY
+        return NSRect(
+            x: rightX - marginIconSize - marginIconRightInset,
+            y: cy - marginIconSize / 2,
+            width: marginIconSize,
+            height: marginIconSize
+        )
+    }
+
+    // MARK: - Custom drawing
 
     private func drawQuoteBackgrounds(in dirtyRect: NSRect) {
         guard let lm = layoutManager,
@@ -318,7 +671,6 @@ final class ReadingTextView: NSTextView {
                 .font: font, .foregroundColor: color
             ]
             let bulletSize = bullet.size(withAttributes: attrs)
-            // Center bullet on hidden marker glyph
             let cx = origin.x + bounding.midX
             let cy = origin.y + bounding.midY
             let drawRect = NSRect(
@@ -331,6 +683,106 @@ final class ReadingTextView: NSTextView {
             bullet.draw(at: drawRect.origin, withAttributes: attrs)
         }
     }
+
+    private func drawCommentMarginIcons(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let symbolName = "text.bubble"
+        guard let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) else { return }
+        let cfg = NSImage.SymbolConfiguration(pointSize: marginIconSize - 2, weight: .regular)
+        let configured = symbol.withSymbolConfiguration(cfg) ?? symbol
+        configured.isTemplate = true
+
+        // Track lines we've already drawn an icon on (use minY of bounding)
+        var seenY: Set<Int> = []
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdComment, in: fullRange) { value, attrRange, _ in
+            guard (value as? Bool) == true else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let key = Int((origin.y + bounding.minY).rounded())
+            if seenY.contains(key) { return }
+            seenY.insert(key)
+            let iconRect = marginIconRect(for: bounding, origin: origin)
+            if !iconRect.intersects(dirtyRect) { return }
+
+            NSColor.secondaryLabelColor.setFill()
+            configured.draw(in: iconRect, from: .zero, operation: .sourceOver,
+                            fraction: 0.85, respectFlipped: true, hints: nil)
+        }
+    }
+
+    // MARK: - Smart comment insertion (called via responder chain from ⌘')
+
+    @objc func mtdInsertCommentAction(_ sender: Any?) {
+        let nsText = string as NSString
+        let sel = selectedRange()
+        let plan = computeCommentInsertion(in: nsText as String, selection: sel)
+
+        let insertion = plan.insertion
+        let location = plan.insertion_location
+        let newCursor = plan.cursor_location
+
+        let replaceRange = NSRange(location: location, length: 0)
+        if shouldChangeText(in: replaceRange, replacementString: insertion) {
+            // Use NSAttributedString to inherit current typing attrs
+            let attr = NSAttributedString(string: insertion, attributes: typingAttributes)
+            textStorage?.replaceCharacters(in: replaceRange, with: attr)
+            didChangeText()
+        }
+
+        setSelectedRange(NSRange(location: newCursor, length: 0))
+        scrollRangeToVisible(NSRange(location: newCursor, length: 0))
+
+        // Notify ContentView to open sidebar and focus
+        let commentLoc = location
+        NotificationCenter.default.post(
+            name: .mtdCommentAdded,
+            object: nil,
+            userInfo: ["location": commentLoc]
+        )
+    }
+
+    private struct InsertionPlan {
+        let insertion: String
+        let insertion_location: Int
+        let cursor_location: Int
+    }
+
+    private func computeCommentInsertion(in text: String, selection: NSRange) -> InsertionPlan {
+        let nsText = text as NSString
+        // Empty selection → inline at cursor
+        if selection.length == 0 {
+            let template = "<!--  -->"
+            return InsertionPlan(
+                insertion: template,
+                insertion_location: selection.location,
+                cursor_location: selection.location + 5
+            )
+        }
+        let selText = nsText.substring(with: selection)
+        if selText.contains("\n") {
+            // Block: comment on own line BEFORE selection's first line
+            let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
+            let template = "<!--  -->\n"
+            return InsertionPlan(
+                insertion: template,
+                insertion_location: lineRange.location,
+                cursor_location: lineRange.location + 5
+            )
+        } else {
+            // Inline: after selection
+            let after = NSMaxRange(selection)
+            let template = " <!--  -->"
+            return InsertionPlan(
+                insertion: template,
+                insertion_location: after,
+                cursor_location: after + 6
+            )
+        }
+    }
 }
 
 // MARK: - Editor
@@ -340,9 +792,10 @@ struct MarkdownEditor: NSViewRepresentable {
     let mode: DisplayMode
     let palette: ThemePalette
     let scale: CGFloat
+    let commentRanges: [NSRange]
+    let onCommentTap: (Int) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
-        // Manually construct the text stack so we can use ReadingTextView.
         let textContainer = NSTextContainer(size: NSSize(
             width: 0,
             height: CGFloat.greatestFiniteMagnitude
@@ -364,6 +817,7 @@ struct MarkdownEditor: NSViewRepresentable {
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]
+        tv.onCommentTap = onCommentTap
 
         tv.delegate = context.coordinator
         tv.allowsUndo = true
@@ -393,6 +847,7 @@ struct MarkdownEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? ReadingTextView else { return }
         context.coordinator.parent = self
+        tv.onCommentTap = onCommentTap
         applyAppearance(to: tv)
         if tv.string != text { tv.string = text }
         context.coordinator.applyHighlighting(to: tv)
@@ -529,8 +984,18 @@ struct MarkdownEditor: NSViewRepresentable {
                     bodyFont: bodyFont,
                     codeFont: codeFont,
                     scale: scale,
-                    cursorRange: cursorRange
+                    cursorRange: cursorRange,
+                    commentRanges: parent.commentRanges
                 )
+            } else {
+                // Raw mode: still mark comment ranges so margin icon shows
+                for r in parent.commentRanges {
+                    if NSMaxRange(r) <= full.length {
+                        storage.addAttribute(.mtdComment, value: true, range: r)
+                        storage.addAttribute(.mtdCommentLocation,
+                                             value: r.location, range: r)
+                    }
+                }
             }
             storage.endEditing()
 
@@ -543,7 +1008,7 @@ struct MarkdownEditor: NSViewRepresentable {
     }
 }
 
-// MARK: - Syntax highlighter (rendered mode only)
+// MARK: - Syntax highlighter
 
 enum SyntaxHighlighter {
 
@@ -553,29 +1018,33 @@ enum SyntaxHighlighter {
                       bodyFont: NSFont,
                       codeFont: NSFont,
                       scale: CGFloat,
-                      cursorRange: NSRange) {
+                      cursorRange: NSRange,
+                      commentRanges: [NSRange]) {
         let str = storage.string
 
-        // 0. HTML comments — hidden in rendered mode (multi-line capable)
-        enumerate(#"<!--[\s\S]*?-->"#,
-                  in: str, range: range,
-                  options: [.dotMatchesLineSeparators]) { m in
-            // Per-line: collapse each line's chars; newlines will leave their own height.
-            // For block comments on their own line, also kill the paragraph spacing.
-            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
-            let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
-            storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: m.range)
+        // Tag every comment range so the margin icon renders in both modes
+        for r in commentRanges {
+            if NSMaxRange(r) <= range.length {
+                storage.addAttribute(.mtdComment, value: true, range: r)
+                storage.addAttribute(.mtdCommentLocation, value: r.location, range: r)
+            }
+        }
 
-            // If the comment occupies an entire line by itself, collapse that line's height.
+        // 0. Hide HTML comments in rendered mode (skip ranges inside code fences handled at parse step)
+        for r in commentRanges {
+            guard NSMaxRange(r) <= range.length else { continue }
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: r)
+            let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
+            storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: r)
+
             let nsStr = str as NSString
-            let lineRange = nsStr.lineRange(for: m.range)
-            // Trim trailing newline for comparison
+            let lineRange = nsStr.lineRange(for: r)
             var trimmedLine = lineRange
             if trimmedLine.length > 0 {
                 let last = nsStr.character(at: trimmedLine.location + trimmedLine.length - 1)
                 if last == 0x0A { trimmedLine.length -= 1 }
             }
-            if trimmedLine.location == m.range.location && trimmedLine.length == m.range.length {
+            if trimmedLine.location == r.location && trimmedLine.length == r.length {
                 let para = NSMutableParagraphStyle()
                 para.maximumLineHeight = 0.01
                 para.minimumLineHeight = 0.01
@@ -606,16 +1075,15 @@ enum SyntaxHighlighter {
                 }
         }
 
-        // 3. Horizontal rule:  --- / *** / ___ on a line — drawn as full-width line
+        // 3. Horizontal rule
         enumerate(#"^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$"#,
                   in: str, range: range, options: .anchorsMatchLines) { m in
             storage.addAttribute(.mtdHR, value: true, range: m.range)
             storage.addAttribute(.mtdHRColor, value: palette.hrColor, range: m.range)
-            // Hide the dashes; the line is drawn separately by the text view
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
         }
 
-        // 4. Blockquote — left bar + box bg drawn by view; > markers hidden
+        // 4. Blockquote
         enumerate(#"^>\s?.*$"#, in: str, range: range, options: .anchorsMatchLines) { m in
             let para = NSMutableParagraphStyle()
             para.firstLineHeadIndent = 14
@@ -624,7 +1092,6 @@ enum SyntaxHighlighter {
             storage.addAttribute(.mtdQuote, value: true, range: m.range)
             storage.addAttribute(.mtdQuoteBG, value: palette.blockquoteBackground, range: m.range)
             storage.addAttribute(.mtdQuoteBar, value: palette.secondaryColor, range: m.range)
-            // Hide the leading > and (optional) following space
             let lineNS = (str as NSString).substring(with: m.range)
             if lineNS.hasPrefix(">") {
                 var hideLen = 1
@@ -637,7 +1104,7 @@ enum SyntaxHighlighter {
             }
         }
 
-        // 5. Lists — bullet markers (-, *, +) drawn as •; numbered (1.) keeps source text
+        // 5. Lists
         enumerate(#"^([ \t]*)([-*+])([ \t]+)"#,
                   in: str, range: range, options: .anchorsMatchLines) { m in
             let lineRange = (str as NSString).lineRange(for: m.range)
@@ -646,7 +1113,6 @@ enum SyntaxHighlighter {
             para.headIndent = 22
             storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
             let marker = m.range(at: 2)
-            // Hide the source - / * / +; the view paints a • at this position
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: marker)
             storage.addAttribute(.mtdBullet, value: true, range: marker)
             storage.addAttribute(.mtdBulletColor, value: palette.secondaryColor, range: marker)
@@ -662,7 +1128,7 @@ enum SyntaxHighlighter {
             storage.addAttribute(.foregroundColor, value: palette.secondaryColor, range: marker)
         }
 
-        // 6. ATX headings — applies size + bold to whole line; #'s hide when cursor off line
+        // 6. Headings
         enumerate(#"^(#{1,6})[ \t]+.*$"#, in: str, range: range, options: .anchorsMatchLines) { m in
             let hashes = m.range(at: 1)
             let level = max(1, min(6, hashes.length))
@@ -757,16 +1223,18 @@ enum SyntaxHighlighter {
             }
         }
 
-        // 12. Bare URLs / emails via NSDataDetector
+        // 12. Bare URLs
         if let detector = try? NSDataDetector(types:
             NSTextCheckingResult.CheckingType.link.rawValue) {
             detector.enumerateMatches(in: str, range: range) { match, _, _ in
                 guard let m = match, let url = m.url else { return }
                 let nsStr = str as NSString
                 if m.range.location > 0,
-                   nsStr.character(at: m.range.location - 1) == 0x28 {
-                    return
-                }
+                   nsStr.character(at: m.range.location - 1) == 0x28 { return }
+                // Don't auto-link inside hidden HTML comments
+                if commentRanges.contains(where: {
+                    NSLocationInRange(m.range.location, $0)
+                }) { return }
                 storage.addAttribute(.link, value: url, range: m.range)
                 storage.addAttribute(.foregroundColor, value: palette.linkColor, range: m.range)
                 storage.addAttribute(.underlineStyle,
@@ -794,7 +1262,7 @@ enum SyntaxHighlighter {
         }
     }
 
-    private static func hideRange(_ storage: NSTextStorage, range: NSRange, in font: NSFont) {
+    fileprivate static func hideRange(_ storage: NSTextStorage, range: NSRange, in font: NSFont) {
         let charWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
         storage.addAttribute(.foregroundColor, value: NSColor.clear, range: range)
         storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)), range: range)
@@ -846,32 +1314,35 @@ struct HelpView: View {
                     ("⌘L", "Cycle theme"),
                     ("⌘= / ⌘-", "Zoom in / out"),
                     ("⌘0", "Reset zoom"),
+                    ("⌘'", "Add comment at cursor"),
+                    ("⌘\\", "Toggle comments sidebar"),
                     ("⌘W", "Close window"),
                     ("⌘F", "Find in document"),
+                ])
+
+                section("Comments (v2)", rows: [
+                    ("Format", "<!-- text --> in your file. Plain HTML comments."),
+                    ("Add", "Cursor in line → inline. Selection → after / before."),
+                    ("Sidebar", "Right side, ⌘\\ to toggle. Edit text directly."),
+                    ("Margin icon", "Click to open sidebar focused on that comment."),
+                    ("Code", "Comments inside ``` blocks are NOT hidden."),
                 ])
 
                 section("Editing tips", rows: [
                     ("Lists", "Enter continues -, *, +, or numbered. Empty marker exits."),
                     ("Markers", "**, *, ` chars hide when cursor is off the styled span."),
-                    ("Links", "[text](url) or bare https://… and domain.com — click to open."),
+                    ("Links", "[text](url) or bare https://… and domain.com."),
                     ("Frontmatter", "Toolbar button inserts a YAML block at top."),
-                    ("Comments", "<!-- @ note --> stays in file but doesn't render."),
                 ])
 
                 section("Terminal", rows: [
                     ("open -a MarkThisDown notes.md", "Open file"),
-                    ("open -a MarkThisDown", "Untitled window"),
                     ("alias mtd='open -a MarkThisDown'", "Add to ~/.zshrc"),
                 ])
-
-                Text("Tooltip delay is a macOS setting; if hovers feel slow check System Settings → Accessibility.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(16)
         }
-        .frame(maxHeight: 560)
+        .frame(maxHeight: 600)
     }
 
     @ViewBuilder

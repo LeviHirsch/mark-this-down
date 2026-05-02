@@ -151,6 +151,19 @@ struct MarkThisDownApp: App {
                     fontScale = 1.0
                 }
                 .keyboardShortcut("0", modifiers: .command)
+
+                Divider()
+
+                Button("Add Comment at Cursor") {
+                    NSApp.sendAction(Selector(("mtdInsertCommentAction:")),
+                                     to: nil, from: nil)
+                }
+                .keyboardShortcut("'", modifiers: .command)
+
+                Button("Toggle Comments Sidebar") {
+                    NotificationCenter.default.post(name: .mtdToggleSidebar, object: nil)
+                }
+                .keyboardShortcut("\\", modifiers: .command)
             }
         }
     }
@@ -159,4 +172,6 @@ struct MarkThisDownApp: App {
 extension Notification.Name {
     static let mtdToggleMode = Notification.Name("mtdToggleMode")
     static let mtdInsertFrontmatter = Notification.Name("mtdInsertFrontmatter")
+    static let mtdToggleSidebar = Notification.Name("mtdToggleSidebar")
+    static let mtdCommentAdded = Notification.Name("mtdCommentAdded")
 }
