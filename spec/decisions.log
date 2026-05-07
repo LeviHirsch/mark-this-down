@@ -1,0 +1,38 @@
+# decisions.log
+
+<!-- One entry per architectural or structuring decision made during spec authoring. -->
+
+---
+
+## 2026-05-06 — AC tree: phases 3 and 4 as parallel vs. sequential
+
+**Decision:** Tables/coloring (Phase 3) and outline view (Phase 4) are separate phases with Phase 4 depending on both Phase 1 and Phase 2.
+
+**Alternatives considered:**
+- Merge tables/coloring/outline into a single "surface coverage" phase — rejected because outline has a distinct navigation concern (scroll save/restore) that benefits from Phase 2's navigation pattern being established first, and merging would make the phase too large to deliver coherently.
+- Make Phase 3 and Phase 4 parallel (no dependency between them) — viable, but Phase 4's scroll-restore pattern echoes Phase 2's jump-to-location work; sequencing avoids re-solving the same scroll problem twice.
+
+**Rationale for chosen structure:** Strict backward-dependency chain (1 → 2 → 4, 1 → 3) keeps each phase independently shippable and avoids duplicate scroll-management decisions.
+
+---
+
+## 2026-05-06 — AC5.2 tag: [adopted] not [regression]
+
+**Decision:** AC5.2 (margin icon click opens sidebar and scrolls to comment) tagged `[adopted]`, not `[regression]`.
+
+**Alternatives considered:**
+- Tag as `[regression]` — rejected: the user did not explicitly verify this behavior by hand during the interview; the interview only confirmed that the first-comment *fallback* is wrong. The positive hit-test path is a claimed behavior from code inspection, not a hand-verified one.
+
+**Rationale:** Template rule: `[regression]` only for behaviors explicitly verified by hand during interview. All other existing-behavior claims are `[adopted]`.
+
+---
+
+## 2026-05-06 — Code-block syntax highlighting: constraint interpretation
+
+**Decision:** AC11 is included as `[delta]` with an open question flagging the implementation approach, rather than being excluded as violating the "no third-party renderers" constraint.
+
+**Alternatives considered:**
+- Exclude entirely until constraint is clarified — rejected because the interview explicitly listed it as must-have.
+- Treat the constraint as banning only full Markdown renderers (e.g., cmark, Down), not lightweight grammar/token libraries — adopted as working interpretation, flagged as open question.
+
+**Rationale:** Interview intent is clear (it's in-scope); constraint needs a `/spec decide` to resolve the engine question before implementation.
