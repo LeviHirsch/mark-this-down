@@ -1,0 +1,12 @@
+schema_version: 1
+iteration: 1
+mode: adopted
+phase: interviewing
+started_at: "2026-05-06T20:12:00"
+last_command: /spec adopt
+last_command_at: "2026-05-06T20:12:00"
+spec_sha: null
+latest_interview: v001-2026-05-06-2012-interview.md
+latest_review_stamp: null
+latest_verify: null
+phases_implemented: []
