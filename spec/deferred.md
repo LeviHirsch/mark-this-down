@@ -8,9 +8,9 @@
 
 **Category:** feature
 **Deferred since:** iteration 1
-**Last touched:** iteration 1
+**Last touched:** iteration 1 (revised 2026-05-08)
 **Defer count:** 1
-**Description:** Replace or supplement the sidebar search bar with real in-document search (highlights matches in the main text view). The current comment-filter-only search was removed as useless. Full document search is desirable but not a core feature for iteration 1.
+**Description:** Replace the removed sidebar search bar with real in-document search (highlights matches in the main text view). Scope: must search document content, not just comment bodies — the comment-body-only filter was removed as useless. Flag for next iteration consideration.
 **Source:** via /spec interview Phase A ambiguity 3 (iteration 1)
 
 ---

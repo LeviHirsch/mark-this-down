@@ -1,10 +1,10 @@
 schema_version: 1
 iteration: 1
 mode: adopted
-phase: in-review
+phase: revised
 started_at: "2026-05-06T20:12:00"
-last_command: /spec review
-last_command_at: "2026-05-08T01:02:00"
+last_command: /spec revise
+last_command_at: "2026-05-08T01:15:00"
 spec_sha: null
 latest_interview: v001-2026-05-06-2012-interview.md
 latest_review_stamp: v001-2026-05-08-0102

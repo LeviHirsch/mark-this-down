@@ -1,9 +1,9 @@
 # markthisdown — Specification (iteration 1)
 
 > Status: draft
-> Revision: 1
+> Revision: 2
 > Prior iteration: brownfield — no prior iteration through this skill
-> Last updated: 2026-05-06
+> Last updated: 2026-05-08
 
 ## Motivation
 
@@ -31,7 +31,7 @@ Formalize the spec for an existing system and surface any code/spec drift. The p
 ### Added
 - Tables rendering in `ReadingTextView` / SyntaxHighlighter.
 - File-path and `[bracket-tag]` coloring in SyntaxHighlighter.
-- Code-block syntax highlighting inside fenced regions.
+- Line numbers in raw mode — reserved left margin, wrap-aware.
 - Outline view — left-side toggle panel showing document headings; saves and restores scroll position on toggle.
 
 ### Modified
@@ -40,12 +40,12 @@ Formalize the spec for an existing system and surface any code/spec drift. The p
 - `CommentsSidebar`: remove search bar entirely. `[build-change-todo]`
 - ⌘' insertion: fix auto-focus timing so new comment card receives keyboard focus reliably. `[build-change-todo]`
 - `commentLocationForMarginIcon`: remove first-comment fallback; failed hit-test is a no-op. `[build-change-todo]`
-- `ReadingTextView`: implement frontmatter collapse/expand toggle. `[build-change-todo]`
+- `ReadingTextView`: unified frontmatter toggle button (add / collapse / expand). `[build-change-todo]`
 - Comment insertion: block ⌘' when cursor is inside frontmatter block. `[build-change-todo]`
 - Sidebar card: clicking a card jumps the editor to the comment's location and scrolls it into view.
 
 ### Removed
-- Sidebar comment search bar (useless filter; in-document search deferred to D-001).
+- Sidebar comment search bar (filtered comment text only, not document content — useless in practice; in-document search deferred to D-001).
 
 ## Invariants `[must not change]`
 
@@ -71,7 +71,7 @@ None.
 
 ## Goal
 
-Ship the bug fixes and full markdown surface coverage that make markthisdown a reliable, visually complete daily markdown editor with a snappy comment workflow.
+Provide a local-first annotation layer on plain Markdown files that preserves full interoperability — comments as standard HTML, no companion files, no custom extensions, LLM-readable without tooling — while delivering the bug fixes and markdown surface coverage that make the app reliable for daily use.
 
 ## Constraints
 
@@ -83,7 +83,8 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 ## Success criteria
 
 - All seven Phase A `[build-change-todo]` items are implemented and manually verified.
-- Tables, file-path/bracket-tag coloring, and code-block syntax highlighting render correctly for common cases.
+- Tables, file-path/bracket-tag coloring render correctly for common cases.
+- Line numbers appear in raw mode and track correctly on wrapped lines.
 - Outline view opens, lists headings, and scroll position is restored on close.
 - Sidebar card click scrolls the editor to the comment's location.
 - Comment insert/edit/delete/navigate workflow produces no data loss in normal use.
@@ -97,9 +98,11 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 - Brew tap or package distribution.
 - Git remote / cloud sync.
 - In-document search (deferred — D-001).
+- Code-block token-level syntax highlighting (not in scope; block-level monospace styling is existing behavior covered by AC14.4).
 - Code-fence edge cases: indented fences, backticks in comment body, comment delimiters as literal code-block content (deferred — D-002).
 - Comment parse debouncing beyond the single-parse fix (deferred — D-003).
 - List item insertion semantics redesign (deferred — D-004).
+- Raw-mode IDE enrichments beyond line numbers (line highlighting, gutter indicators, etc.) — deferred.
 
 ## Acceptance criteria (MECE)
 
@@ -123,11 +126,12 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 - AC5.1. Clicking the right-margin band where no comment icon is drawn produces no action (no sidebar open, no scroll, no selection change). `[delta]`
 - AC5.2. Clicking the right-margin band at a line with a comment icon still opens the sidebar and scrolls to that comment. `[adopted]`
 
-### AC6. Frontmatter collapse/expand `[delta]`
-- AC6.1. A document with a YAML frontmatter block (`---` … `---`) shows a collapse affordance in `ReadingTextView`. `[delta]`
-- AC6.2. Activating collapse hides the frontmatter body lines; a single summary line (e.g., "frontmatter") remains visible. `[delta]`
-- AC6.3. Activating expand restores all frontmatter lines. `[delta]`
-- AC6.4. Collapse/expand state does not modify `document.text`. `[delta]`
+### AC6. Frontmatter toggle `[delta]`
+- AC6.1. `ReadingTextView` shows a persistent toggle button whose label and action depend on document state. The button's visual form and placement are decided at implementation time. `[delta]`
+- AC6.2. When no frontmatter block exists, the button reads "Add frontmatter"; activating it inserts a minimal `---\n---` block at the document top and leaves it expanded. `[delta]`
+- AC6.3. When a frontmatter block exists, the button reads "Collapse" or "Expand" depending on current collapse state. `[delta]`
+- AC6.4. Activating "Collapse" hides the frontmatter body lines; a single summary line (e.g., "frontmatter") remains visible. `[delta]`
+- AC6.5. Activating "Expand" restores all frontmatter lines; collapse/expand state does not modify `document.text`. `[delta]`
 
 ### AC7. ⌘' blocked inside frontmatter `[delta]`
 - AC7.1. With cursor inside a frontmatter block, ⌘' is a no-op (no comment inserted, no sidebar action). `[delta]`
@@ -144,17 +148,17 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 - AC9.3. Raw mode shows the plain table source unchanged. `[adopted]`
 
 ### AC10. File-path and bracket-tag coloring `[delta]`
-- AC10.1. Bare file paths (containing `/` and a recognized extension or starting with `./` or `~/`) are colored distinctly in rendered mode. `[delta]`
-- AC10.2. `[bracket-tag]` tokens (alphanumeric text wrapped in `[` `]` that are not Markdown link syntax) are colored distinctly. `[delta]`
+- AC10.1. Bare file paths are colored distinctly in rendered mode. A token is treated as a file path if it starts with `./`, `~/`, or `/`, or ends with a recognized file extension. The recognized extension list is defined via `/spec decide` before Phase 3 implementation. `[delta]`
+- AC10.2. `[bracket-tag]` tokens are colored distinctly. A token is a bracket-tag if it matches `[text]` and is not immediately followed by `(` (which would make it a Markdown link). `[delta]`
 - AC10.3. Coloring does not apply inside fenced code blocks or frontmatter. `[delta]`
 
-### AC11. Code-block syntax highlighting `[delta]`
-- AC11.1. Fenced code blocks with a recognized language tag (e.g., ` ```swift `, ` ```python `, ` ```js `) receive token-level coloring inside the block. `[delta]`
-- AC11.2. Fenced code blocks with no language tag or an unrecognized tag render as plain monospace (current behavior preserved). `[adopted]`
-- AC11.3. Highlighting does not alter the stored document text. `[delta]`
+### AC11. Line numbers in raw mode `[delta]`
+- AC11.1. In raw mode, a reserved left margin displays line numbers for each logical line of the document. `[delta]`
+- AC11.2. When a logical line wraps across multiple visual rows, only the first visual row is numbered; continuation rows show no number. `[delta]`
+- AC11.3. Line numbers are not visible in rendered mode. `[delta]`
 
 ### AC12. Outline view `[delta]`
-- AC12.1. A toggle button opens/closes a left-side panel listing all ATX headings (`#`–`######`) in document order. `[delta]`
+- AC12.1. A toggle button opens/closes a left-side panel listing all ATX headings (`#`–`######`) in document order. The toggle mechanism and panel placement are decided at implementation time. `[delta]`
 - AC12.2. Each outline entry shows heading level (indented) and text. `[delta]`
 - AC12.3. Clicking an outline entry scrolls the editor to that heading and moves the cursor to it. `[delta]`
 - AC12.4. Opening the outline view saves the current scroll position; closing restores it. `[delta]`
@@ -193,13 +197,13 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 
 ### Phase 1. Bug fixes (Phase A build-change-todos)
 **Delivers:** All seven known correctness bugs are resolved; the app is stable and behaves as documented.
-**Unblocks:** Phase 2 (surface coverage) — establishes a correct rendering and comment foundation before extending it.
+**Unblocks:** Phases 2, 3, and 4 — establishes a correct rendering and comment foundation before extending it.
 - AC1.1, AC1.2
 - AC2.1, AC2.2
 - AC3.1, AC3.2
 - AC4.1, AC4.2
 - AC5.1
-- AC6.1, AC6.2, AC6.3, AC6.4
+- AC6.1, AC6.2, AC6.3, AC6.4, AC6.5
 - AC7.1, AC7.2
 
 ### Phase 2. Comment navigation
@@ -207,22 +211,19 @@ Ship the bug fixes and full markdown surface coverage that make markthisdown a r
 **Depends on:** Phase 1 (stable comment state and sidebar baseline)
 - AC8.1, AC8.2, AC8.3
 
-### Phase 3. Markdown surface — tables and coloring
-**Delivers:** Tables render visually; file paths and bracket-tags are colored; fenced code blocks highlight by language.
+### Phase 3. Markdown surface — tables, coloring, and line numbers
+**Delivers:** Tables render visually; file paths and bracket-tags are colored; line numbers appear in raw mode.
 **Depends on:** Phase 1 (correct syntax highlighter state post-bug-fixes)
+**Note:** Resolve file-path extension allowlist via `/spec decide` before starting this phase.
 - AC9.1, AC9.2
 - AC10.1, AC10.2, AC10.3
-- AC11.1, AC11.3
+- AC11.1, AC11.2, AC11.3
 
 ### Phase 4. Outline view
 **Delivers:** Left-panel outline listing headings; click-to-jump; scroll restore on close.
-**Depends on:** Phase 1 (stable document state and scroll preservation), Phase 2 (navigation pattern established)
+**Depends on:** Phase 1 (stable document state and scroll preservation)
 - AC12.1, AC12.2, AC12.3, AC12.4, AC12.5
 
 ## Open questions
 
-- **Code-block syntax highlighting scope (AC11.1):** The interview confirmed this is in-scope but did not specify which languages to support or which highlighting engine to use. The constraint bans third-party renderers but is silent on a lightweight token-regex approach vs. a bundled grammar library. Needs a `/spec decide` before Phase 3 implementation begins.
-- **File-path detection heuristic (AC10.1):** The interview did not define the regex or extension allowlist for "file path." Needs a `/spec decide` before Phase 3 implementation begins.
-- **Bracket-tag exclusion from Markdown links (AC10.2):** `[text](url)` is a Markdown link; `[bracket-tag]` alone is a tag. The boundary rule needs to be stated precisely — especially for `[tag]` with no following `(`.
-- **Outline view placement and toggle mechanism (AC12.1):** The interview noted "left toggle (button or side-panel, design deferred to implementation)." The exact UI needs to be decided before Phase 4.
-- **Frontmatter collapse affordance (AC6.1):** The interview did not specify whether collapse is triggered by a button, a click on the `---` line, or a disclosure triangle. Implementation should decide and document.
+- **File-path extension allowlist (AC10.1):** Detection rule is defined (starts with `./`, `~/`, `/`, or ends with a recognized extension), but the recognized extension list must be defined via `/spec decide` before Phase 3 implementation begins.

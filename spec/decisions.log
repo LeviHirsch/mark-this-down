@@ -27,6 +27,19 @@
 
 ---
 
+## 2026-05-08 — Frontmatter toggle: unified add/collapse/expand affordance
+
+**Decision:** The frontmatter affordance in `ReadingTextView` is a single toggle button with two states: "Add frontmatter" (when no frontmatter block exists) and "Collapse/Expand frontmatter" (when a frontmatter block exists). The button is always visible; its label and action change based on document state.
+
+**Alternatives considered:**
+- Separate "Add frontmatter" button and collapse/expand affordance — rejected: two affordances for the same region creates confusion about which to use.
+- Collapse/expand only; no in-app way to add frontmatter — rejected: leaves a dead UI state (button visible but inactive) when no frontmatter exists.
+- Only show affordance when frontmatter exists — rejected: means "add frontmatter" has no dedicated UI path.
+
+**Rationale:** Single button, context-sensitive label, no dead states. Folds AC6.1 and the "add frontmatter" case into one coherent interaction. AC6 sub-ACs now cover both the no-frontmatter (add) and has-frontmatter (collapse/expand) paths.
+
+---
+
 ## 2026-05-06 — Code-block syntax highlighting: constraint interpretation
 
 **Decision:** AC11 is included as `[delta]` with an open question flagging the implementation approach, rather than being excluded as violating the "no third-party renderers" constraint.
