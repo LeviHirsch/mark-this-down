@@ -103,6 +103,8 @@ struct ContentView: View {
     @State private var showHelp: Bool = false
     @State private var showSidebar: Bool = false
     @State private var focusedCommentLocation: Int? = nil
+    @State private var comments: [MTDComment] = []
+    @State private var frontmatterCollapsed: Bool = false
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("fontScale") private var fontScale: Double = 1.0
 
@@ -113,8 +115,8 @@ struct ContentView: View {
         theme.palette(systemIsDark: colorScheme == .dark)
     }
 
-    private var comments: [MTDComment] {
-        MTDComment.parse(document.text)
+    private var hasFrontmatter: Bool {
+        frontmatterRange(in: document.text) != nil
     }
 
     private var statusText: String {
@@ -131,6 +133,7 @@ struct ContentView: View {
                        palette: palette,
                        scale: CGFloat(fontScale),
                        commentRanges: comments.map { $0.range },
+                       frontmatterCollapsed: frontmatterCollapsed && hasFrontmatter,
                        onCommentTap: { location in
                            focusedCommentLocation = location
                            showSidebar = true
@@ -210,11 +213,11 @@ struct ContentView: View {
                     .help("Toggle comments sidebar (⌘\\)")
 
                     Button {
-                        insertFrontmatter()
+                        frontmatterButtonAction()
                     } label: {
-                        Label("Insert Frontmatter", systemImage: "text.badge.plus")
+                        Label(frontmatterButtonLabel, systemImage: frontmatterButtonIcon)
                     }
-                    .help("Insert frontmatter at top of document")
+                    .help(frontmatterButtonHelp)
 
                     Button {
                         NSApp.sendAction(
@@ -237,9 +240,13 @@ struct ContentView: View {
                     }
                 }
             }
-            .onAppear { recomputeStateForFileURL() }
+            .onAppear {
+                recomputeStateForFileURL()
+                comments = MTDComment.parse(document.text)
+            }
             .onChange(of: fileURL) { _, _ in recomputeStateForFileURL() }
-            .onChange(of: document.text) { _, _ in
+            .onChange(of: document.text) { _, newText in
+                comments = MTDComment.parse(newText)
                 guard fileURL != nil else { return }
                 saveState = .autosaving
                 debounceTask?.cancel()
@@ -279,22 +286,46 @@ struct ContentView: View {
     }
 
     private func insertFrontmatter() {
-        if document.text.hasPrefix("---\n") || document.text.hasPrefix("---\r\n") { return }
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        let today = f.string(from: Date())
-        let block = """
-            ---
-            title:
-            description: |
-
-            date: \(today)
-            tags: []
-            ---
-
-
-            """
-        document.text = block + document.text
+        if hasFrontmatter { return }
+        document.text = "---\n---\n\n" + document.text
+        frontmatterCollapsed = false
     }
+
+    private var frontmatterButtonLabel: String {
+        if !hasFrontmatter { return "Add frontmatter" }
+        return frontmatterCollapsed ? "Expand" : "Collapse"
+    }
+
+    private var frontmatterButtonIcon: String {
+        if !hasFrontmatter { return "text.badge.plus" }
+        return frontmatterCollapsed ? "chevron.down.circle" : "chevron.up.circle"
+    }
+
+    private var frontmatterButtonHelp: String {
+        if !hasFrontmatter { return "Add minimal frontmatter at top of document" }
+        return frontmatterCollapsed
+            ? "Expand frontmatter block"
+            : "Collapse frontmatter block"
+    }
+
+    private func frontmatterButtonAction() {
+        if !hasFrontmatter {
+            insertFrontmatter()
+        } else {
+            frontmatterCollapsed.toggle()
+        }
+    }
+}
+
+func frontmatterRange(in text: String) -> NSRange? {
+    let pattern = #"\A---[ \t]*\n.*?\n---[ \t]*$"#
+    guard let re = try? NSRegularExpression(
+        pattern: pattern,
+        options: [.dotMatchesLineSeparators, .anchorsMatchLines]
+    ) else { return nil }
+    let ns = text as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    return re.firstMatch(in: text, range: full)?.range
 }
 
 // MARK: - Comments Sidebar
@@ -305,23 +336,13 @@ struct CommentsSidebar: View {
     @Binding var focusedCommentLocation: Int?
     let onAddComment: () -> Void
 
-    @State private var searchText: String = ""
-
-    private var filtered: [MTDComment] {
-        if searchText.isEmpty { return comments }
-        return comments.filter {
-            $0.body.localizedCaseInsensitiveContains(searchText)
-                || $0.contextLine.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
+            HStack {
+                Text("Comments")
+                    .font(.headline)
                     .foregroundStyle(.secondary)
-                TextField("Search", text: $searchText)
-                    .textFieldStyle(.plain)
+                Spacer()
                 Button(action: onAddComment) {
                     Image(systemName: "plus")
                 }
@@ -333,14 +354,12 @@ struct CommentsSidebar: View {
 
             Divider()
 
-            if filtered.isEmpty {
+            if comments.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "text.bubble")
                         .font(.title2)
                         .foregroundStyle(.tertiary)
-                    Text(comments.isEmpty
-                         ? "No comments yet.\nPress ⌘' to add one."
-                         : "No comments match.")
+                    Text("No comments yet.\nPress ⌘' to add one.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -351,7 +370,7 @@ struct CommentsSidebar: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 6) {
-                            ForEach(filtered) { c in
+                            ForEach(comments) { c in
                                 CommentCard(
                                     comment: c,
                                     isFocused: c.id == focusedCommentLocation,
@@ -366,7 +385,7 @@ struct CommentsSidebar: View {
                     }
                     .onChange(of: focusedCommentLocation) { _, new in
                         guard let new else { return }
-                        if filtered.contains(where: { $0.id == new }) {
+                        if comments.contains(where: { $0.id == new }) {
                             withAnimation { proxy.scrollTo(new, anchor: .center) }
                         }
                     }
@@ -486,6 +505,9 @@ struct CommentCard: View {
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .onAppear { editingBody = comment.body }
+        .task {
+            if isFocused { bodyFocused = true }
+        }
         .onChange(of: comment.body) { _, newBody in
             if !bodyFocused { editingBody = newBody }
         }
@@ -585,30 +607,12 @@ final class ReadingTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let pointInView = convert(event.locationInWindow, from: nil)
-        NSLog("[MTD] mouseDown at \(pointInView)")
-        // First: precise hit on a comment icon → focus that comment
+        // Precise hit on a comment icon → focus that comment.
+        // Otherwise — including the empty right-margin band — fall through to
+        // default text-view handling (no-op for the margin, no fallback).
         if let location = commentLocationForMarginIcon(at: pointInView) {
-            NSLog("[MTD] hit icon for comment at \(location)")
             onCommentTap?(location)
             return
-        }
-        // DEBUG: any click in right margin reserve band → open sidebar with first comment
-        if let tc = textContainer {
-            let rightX = textContainerOrigin.x + tc.size.width
-            if pointInView.x >= rightX, pointInView.x <= rightX + marginIconReserve + 12 {
-                NSLog("[MTD] right-margin click — fallback open sidebar")
-                if let storage = textStorage {
-                    let full = NSRange(location: 0, length: storage.length)
-                    var firstLoc: Int? = nil
-                    storage.enumerateAttribute(.mtdCommentLocation, in: full) { v, _, stop in
-                        if let i = v as? Int { firstLoc = i; stop.pointee = true }
-                    }
-                    if let loc = firstLoc {
-                        onCommentTap?(loc)
-                        return
-                    }
-                }
-            }
         }
         super.mouseDown(with: event)
     }
@@ -815,6 +819,22 @@ final class ReadingTextView: NSTextView {
     @objc func mtdInsertCommentAction(_ sender: Any?) {
         let nsText = string as NSString
         let sel = selectedRange()
+
+        // AC7: cursor inside (or on the delimiter line of) a frontmatter block → no-op.
+        if let fm = frontmatterRange(in: nsText as String) {
+            let cursor = sel.location
+            let lineRangeOfCursor = nsText.lineRange(
+                for: NSRange(location: min(cursor, nsText.length), length: 0)
+            )
+            let fmEnd = NSMaxRange(fm)
+            // Inside the frontmatter span OR on a line that lies within it.
+            if (cursor >= fm.location && cursor <= fmEnd) ||
+                (lineRangeOfCursor.location >= fm.location
+                    && lineRangeOfCursor.location < fmEnd) {
+                return
+            }
+        }
+
         let plan = computeCommentInsertion(in: nsText as String, selection: sel)
 
         let insertion = plan.insertion
@@ -903,6 +923,7 @@ struct MarkdownEditor: NSViewRepresentable {
     let palette: ThemePalette
     let scale: CGFloat
     let commentRanges: [NSRange]
+    let frontmatterCollapsed: Bool
     let onCommentTap: (Int) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -1137,7 +1158,8 @@ struct MarkdownEditor: NSViewRepresentable {
                     codeFont: codeFont,
                     scale: scale,
                     cursorRange: cursorRange,
-                    commentRanges: parent.commentRanges
+                    commentRanges: parent.commentRanges,
+                    frontmatterCollapsed: parent.frontmatterCollapsed
                 )
             } else {
                 // Raw mode: still mark comment ranges so margin icon shows
@@ -1179,7 +1201,8 @@ enum SyntaxHighlighter {
                       codeFont: NSFont,
                       scale: CGFloat,
                       cursorRange: NSRange,
-                      commentRanges: [NSRange]) {
+                      commentRanges: [NSRange],
+                      frontmatterCollapsed: Bool = false) {
         let str = storage.string
 
         // Tag every comment range so the margin icon renders in both modes
@@ -1221,6 +1244,30 @@ enum SyntaxHighlighter {
                   in: str, range: range,
                   options: [.dotMatchesLineSeparators, .anchorsMatchLines]) { m in
             storage.addAttribute(.foregroundColor, value: palette.frontmatterColor, range: m.range)
+
+            if frontmatterCollapsed {
+                // Hide everything after the opening `---\n` line; opening delimiter
+                // remains visible as a summary line. State change does not modify
+                // document.text — purely a visual collapse.
+                let nsStr = str as NSString
+                let openingLine = nsStr.lineRange(
+                    for: NSRange(location: m.range.location, length: 0)
+                )
+                let hideStart = NSMaxRange(openingLine)
+                let hideEnd = NSMaxRange(m.range)
+                guard hideStart < hideEnd else { return }
+                let hideRange = NSRange(location: hideStart, length: hideEnd - hideStart)
+                let para = NSMutableParagraphStyle()
+                para.maximumLineHeight = 0.01
+                para.minimumLineHeight = 0.01
+                para.paragraphSpacing = 0
+                para.paragraphSpacingBefore = 0
+                storage.addAttribute(.paragraphStyle, value: para, range: hideRange)
+                storage.addAttribute(.foregroundColor, value: NSColor.clear, range: hideRange)
+                let charWidth = ("M" as NSString).size(withAttributes: [.font: bodyFont]).width
+                storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)),
+                                     range: hideRange)
+            }
         }
 
         // 2. Fenced code blocks
