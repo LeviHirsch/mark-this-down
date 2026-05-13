@@ -21,6 +21,16 @@ private var appVersion: String {
     return "v\(v)"
 }
 
+// MARK: - Editor jump request
+
+/// Token published by the sidebar to ask the editor to scroll to and select a
+/// comment location. The nonce makes re-clicks of the same card trigger another
+/// jump even when `location` is unchanged.
+struct EditorJumpToken: Equatable {
+    let location: Int
+    let nonce: Int
+}
+
 // MARK: - Comment model
 
 struct MTDComment: Identifiable, Equatable {
@@ -104,6 +114,7 @@ struct ContentView: View {
     @State private var showSidebar: Bool = false
     @State private var focusedCommentLocation: Int? = nil
     @State private var comments: [MTDComment] = []
+    @State private var jumpToken: EditorJumpToken? = nil
     @State private var frontmatterCollapsed: Bool = false
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("fontScale") private var fontScale: Double = 1.0
@@ -134,6 +145,7 @@ struct ContentView: View {
                        scale: CGFloat(fontScale),
                        commentRanges: comments.map { $0.range },
                        frontmatterCollapsed: frontmatterCollapsed && hasFrontmatter,
+                       jumpToken: jumpToken,
                        onCommentTap: { location in
                            focusedCommentLocation = location
                            showSidebar = true
@@ -144,7 +156,13 @@ struct ContentView: View {
                     documentText: $document.text,
                     comments: comments,
                     focusedCommentLocation: $focusedCommentLocation,
-                    onAddComment: triggerAddComment
+                    onAddComment: triggerAddComment,
+                    onJumpToComment: { loc in
+                        jumpToken = EditorJumpToken(
+                            location: loc,
+                            nonce: (jumpToken?.nonce ?? 0) + 1
+                        )
+                    }
                 )
                 .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
             }
@@ -335,6 +353,7 @@ struct CommentsSidebar: View {
     let comments: [MTDComment]
     @Binding var focusedCommentLocation: Int?
     let onAddComment: () -> Void
+    let onJumpToComment: (Int) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -376,7 +395,10 @@ struct CommentsSidebar: View {
                                     isFocused: c.id == focusedCommentLocation,
                                     onUpdate: { updateBody(of: c, to: $0) },
                                     onDelete: { deleteComment(c) },
-                                    onTap: { focusedCommentLocation = c.id }
+                                    onTap: {
+                                        focusedCommentLocation = c.id
+                                        onJumpToComment(c.id)
+                                    }
                                 )
                                 .id(c.id)
                             }
@@ -924,6 +946,7 @@ struct MarkdownEditor: NSViewRepresentable {
     let scale: CGFloat
     let commentRanges: [NSRange]
     let frontmatterCollapsed: Bool
+    let jumpToken: EditorJumpToken?
     let onCommentTap: (Int) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -985,6 +1008,20 @@ struct MarkdownEditor: NSViewRepresentable {
         }
         context.coordinator.applyHighlighting(to: tv)
         context.coordinator.lastMode = mode
+
+        // Run the sidebar-requested jump AFTER applyHighlighting so the highlight
+        // path's save/restore of scroll origin (ContentView.swift:1183-1188) does
+        // not immediately undo our intentional scroll change.
+        if let token = jumpToken,
+           token.nonce != context.coordinator.lastAppliedJumpNonce {
+            let len = (tv.string as NSString).length
+            if token.location >= 0 && token.location <= len {
+                let r = NSRange(location: token.location, length: 0)
+                tv.setSelectedRange(r)
+                tv.scrollRangeToVisible(r)
+            }
+            context.coordinator.lastAppliedJumpNonce = token.nonce
+        }
     }
 
     /// Replace only the changed range — preserves cursor, scroll, selection, focus.
@@ -1061,6 +1098,7 @@ struct MarkdownEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownEditor
         var lastMode: DisplayMode = .rendered
+        var lastAppliedJumpNonce: Int = 0
 
         init(_ parent: MarkdownEditor) { self.parent = parent }
 
