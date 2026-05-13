@@ -14,6 +14,8 @@ extension NSAttributedString.Key {
     static let mtdBulletColor = NSAttributedString.Key("mtdBulletColor")
     static let mtdComment = NSAttributedString.Key("mtdComment")
     static let mtdCommentLocation = NSAttributedString.Key("mtdCommentLocation")
+    static let mtdTablePipe = NSAttributedString.Key("mtdTablePipe")
+    static let mtdTablePipeColor = NSAttributedString.Key("mtdTablePipeColor")
 }
 
 private var appVersion: String {
@@ -617,6 +619,7 @@ final class ReadingTextView: NSTextView {
         drawHorizontalRules(in: dirtyRect)
         drawQuoteBars(in: dirtyRect)
         drawBullets(in: dirtyRect)
+        drawTablePipes(in: dirtyRect)
 
         // Margin icons live OUTSIDE the textContainer clip — expand to full bounds.
         NSGraphicsContext.saveGraphicsState()
@@ -805,6 +808,34 @@ final class ReadingTextView: NSTextView {
         }
     }
 
+    private func drawTablePipes(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let lineWidth: CGFloat = 1
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdTablePipe, in: fullRange) { value, attrRange, _ in
+            guard (value as? Bool) == true else { return }
+            let color = (storage.attribute(.mtdTablePipeColor,
+                                           at: attrRange.location,
+                                           effectiveRange: nil) as? NSColor)
+                ?? NSColor.separatorColor
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange, actualCharacterRange: nil)
+            let bounding = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+            let r = NSRect(
+                x: origin.x + bounding.midX - lineWidth / 2,
+                y: origin.y + bounding.minY,
+                width: lineWidth,
+                height: bounding.height
+            )
+            if !r.intersects(dirtyRect) { return }
+            color.setFill()
+            r.fill()
+        }
+    }
+
     private func drawCommentMarginIcons(in dirtyRect: NSRect) {
         guard let lm = layoutManager,
               let tc = textContainer,
@@ -937,6 +968,88 @@ final class ReadingTextView: NSTextView {
     }
 }
 
+// MARK: - Line-number ruler (raw mode only)
+
+final class LineNumberRulerView: NSRulerView {
+    var lineNumberColor: NSColor = .secondaryLabelColor
+    var rulerFont: NSFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+
+    init(textView: NSTextView, scrollView: NSScrollView) {
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
+        self.clientView = textView
+        self.ruleThickness = 44
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let tv = clientView as? NSTextView,
+              let lm = tv.layoutManager,
+              let tc = tv.textContainer else { return }
+        let nsString = tv.string as NSString
+        if nsString.length == 0 { return }
+
+        // Paint background to match the text view so the gutter blends in.
+        if let bg = tv.backgroundColor.usingColorSpace(.sRGB) {
+            bg.setFill()
+            bounds.fill()
+        }
+
+        let visibleRect = tv.visibleRect
+        let glyphRange = lm.glyphRange(forBoundingRect: visibleRect, in: tc)
+        if glyphRange.length == 0 && nsString.length > 0 { return }
+        let charRange = lm.characterRange(forGlyphRange: glyphRange,
+                                          actualGlyphRange: nil)
+
+        // Compute starting logical line number by counting newlines before charRange.
+        var lineNumber = 1
+        var idx = 0
+        while idx < charRange.location {
+            if nsString.character(at: idx) == 0x0A { lineNumber += 1 }
+            idx += 1
+        }
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: rulerFont,
+            .foregroundColor: lineNumberColor
+        ]
+
+        let originY = tv.textContainerOrigin.y
+        let containerInsetY = tv.textContainerInset.height
+        var cursor = charRange.location
+        let endChar = NSMaxRange(charRange)
+
+        // Iterate by paragraph (logical line). Only the first line fragment of
+        // each paragraph gets a number — wrapped continuation rows are skipped.
+        while cursor < endChar {
+            let lineRange = nsString.lineRange(for: NSRange(location: cursor, length: 0))
+            let glyphIdx = lm.glyphIndexForCharacter(at: lineRange.location)
+            var effective = NSRange(location: 0, length: 0)
+            let fragRect = lm.lineFragmentRect(forGlyphAt: glyphIdx,
+                                               effectiveRange: &effective)
+
+            // Convert fragment rect (text-view coords) to ruler coords.
+            let yInTextView = fragRect.minY + originY + containerInsetY
+            let yInRuler = yInTextView - visibleRect.minY
+
+            let label = "\(lineNumber)" as NSString
+            let size = label.size(withAttributes: attrs)
+            let drawRect = NSRect(
+                x: bounds.width - size.width - 6,
+                y: yInRuler + (fragRect.height - size.height) / 2,
+                width: size.width,
+                height: size.height
+            )
+            label.draw(in: drawRect, withAttributes: attrs)
+
+            lineNumber += 1
+            let next = NSMaxRange(lineRange)
+            if next <= cursor { break }
+            cursor = next
+        }
+    }
+}
+
 // MARK: - Editor
 
 struct MarkdownEditor: NSViewRepresentable {
@@ -991,6 +1104,22 @@ struct MarkdownEditor: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.documentView = tv
 
+        let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
+        scroll.verticalRulerView = ruler
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = (mode == .raw)
+        ruler.lineNumberColor = palette.lineNumberColor
+        context.coordinator.ruler = ruler
+
+        // Redraw the gutter on text edits — Cocoa redraws on scroll for free,
+        // but inserts/deletes that don't change the visible-rect bounds need a nudge.
+        NotificationCenter.default.addObserver(
+            forName: NSText.didChangeNotification,
+            object: tv, queue: .main
+        ) { [weak ruler] _ in
+            ruler?.needsDisplay = true
+        }
+
         tv.string = text
         applyAppearance(to: tv)
         context.coordinator.lastMode = mode
@@ -1008,6 +1137,13 @@ struct MarkdownEditor: NSViewRepresentable {
         }
         context.coordinator.applyHighlighting(to: tv)
         context.coordinator.lastMode = mode
+
+        // Line-number gutter visibility tracks raw mode (AC11.3).
+        scroll.rulersVisible = (mode == .raw)
+        if let ruler = context.coordinator.ruler {
+            ruler.lineNumberColor = palette.lineNumberColor
+            ruler.needsDisplay = true
+        }
 
         // Run the sidebar-requested jump AFTER applyHighlighting so the highlight
         // path's save/restore of scroll origin (ContentView.swift:1183-1188) does
@@ -1099,6 +1235,7 @@ struct MarkdownEditor: NSViewRepresentable {
         var parent: MarkdownEditor
         var lastMode: DisplayMode = .rendered
         var lastAppliedJumpNonce: Int = 0
+        weak var ruler: LineNumberRulerView?
 
         init(_ parent: MarkdownEditor) { self.parent = parent }
 
@@ -1309,8 +1446,10 @@ enum SyntaxHighlighter {
         }
 
         // 2. Fenced code blocks
+        var fenceRanges: [NSRange] = []
         enumerate(#"^```[A-Za-z0-9_+-]*[ \t]*\n([\s\S]*?)\n```[ \t]*$"#,
                   in: str, range: range, options: .anchorsMatchLines) { m in
+            fenceRanges.append(m.range)
             storage.addAttribute(.backgroundColor, value: palette.codeBackground, range: m.range)
             storage.addAttribute(.font, value: codeFont, range: m.range)
             (try? NSRegularExpression(pattern: "^```[^\n]*$", options: .anchorsMatchLines))?
@@ -1321,6 +1460,31 @@ enum SyntaxHighlighter {
                     }
                 }
         }
+
+        // Frontmatter range (used as a skip-zone for tables and path/tag coloring)
+        var frontmatterRange: NSRange? = nil
+        if let re = try? NSRegularExpression(
+            pattern: #"\A---[ \t]*\n.*?\n---[ \t]*$"#,
+            options: [.dotMatchesLineSeparators, .anchorsMatchLines]
+        ), let m = re.firstMatch(in: str, range: range) {
+            frontmatterRange = m.range
+        }
+
+        let isInFenceOrFrontmatter: (NSRange) -> Bool = { r in
+            if let fm = frontmatterRange, NSIntersectionRange(r, fm).length > 0 { return true }
+            return fenceRanges.contains { NSIntersectionRange(r, $0).length > 0 }
+        }
+
+        // 2.5 GFM pipe tables. Detect: header line with at least one `|`, followed
+        //     by a separator line `| --- | --- |` (with optional alignment colons),
+        //     followed by zero or more body lines containing `|`.
+        applyTables(to: storage,
+                    str: str,
+                    range: range,
+                    palette: palette,
+                    codeFont: codeFont,
+                    bodyFont: bodyFont,
+                    skip: isInFenceOrFrontmatter)
 
         // 3. Horizontal rule
         enumerate(#"^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$"#,
@@ -1450,7 +1614,9 @@ enum SyntaxHighlighter {
         }
 
         // 11. Markdown links
+        var mdLinkRanges: [NSRange] = []
         enumerate(#"\[([^\]\n]+)\]\(([^)\n]+)\)"#, in: str, range: range) { m in
+            mdLinkRanges.append(m.range)
             let textRange = m.range(at: 1)
             let urlRange = m.range(at: 2)
             let urlString = (str as NSString).substring(with: urlRange)
@@ -1471,6 +1637,7 @@ enum SyntaxHighlighter {
         }
 
         // 12. Bare URLs
+        var bareURLRanges: [NSRange] = []
         if let detector = try? NSDataDetector(types:
             NSTextCheckingResult.CheckingType.link.rawValue) {
             detector.enumerateMatches(in: str, range: range) { match, _, _ in
@@ -1482,11 +1649,165 @@ enum SyntaxHighlighter {
                 if commentRanges.contains(where: {
                     NSLocationInRange(m.range.location, $0)
                 }) { return }
+                bareURLRanges.append(m.range)
                 storage.addAttribute(.link, value: url, range: m.range)
                 storage.addAttribute(.foregroundColor, value: palette.linkColor, range: m.range)
                 storage.addAttribute(.underlineStyle,
                                      value: NSUnderlineStyle.single.rawValue, range: m.range)
             }
+        }
+
+        // 13. File-path coloring (DEC-001) and bracket-tag coloring.
+        //     Skip inside fenced code blocks, frontmatter, comments, inline code,
+        //     Markdown links (text + URL), and bare URLs already styled above.
+        var inlineCodeRanges: [NSRange] = []
+        enumerate(#"`([^`\n]+)`"#, in: str, range: range) { m in
+            inlineCodeRanges.append(m.range)
+        }
+
+        let pathTagSkip: (NSRange) -> Bool = { r in
+            if isInFenceOrFrontmatter(r) { return true }
+            if commentRanges.contains(where: { NSIntersectionRange(r, $0).length > 0 }) { return true }
+            if inlineCodeRanges.contains(where: { NSIntersectionRange(r, $0).length > 0 }) { return true }
+            if mdLinkRanges.contains(where: { NSIntersectionRange(r, $0).length > 0 }) { return true }
+            if bareURLRanges.contains(where: { NSIntersectionRange(r, $0).length > 0 }) { return true }
+            return false
+        }
+
+        // File paths: (a) starts with ./ ../ ~/ or /, OR (b) ends with a generic
+        // .ext pattern. Word-boundary anchored to avoid grabbing surrounding prose.
+        let pathPattern =
+            #"(?<![\w./~-])((?:\.{1,2}/|~/|/)[A-Za-z0-9_./~\-]+|[A-Za-z0-9_~][A-Za-z0-9_./~\-]*\.[A-Za-z0-9]{1,6})\b"#
+        enumerate(pathPattern, in: str, range: range) { m in
+            if pathTagSkip(m.range) { return }
+            storage.addAttribute(.foregroundColor, value: palette.pathColor, range: m.range)
+        }
+
+        // Bracket-tags: [text] not followed by ( (which would be a Markdown link).
+        enumerate(#"\[([^\]\n]+)\](?!\()"#, in: str, range: range) { m in
+            if pathTagSkip(m.range) { return }
+            let inner = m.range(at: 1)
+            storage.addAttribute(.foregroundColor, value: palette.tagColor, range: inner)
+        }
+    }
+
+    // MARK: - Tables
+
+    private static func applyTables(to storage: NSTextStorage,
+                                    str: String,
+                                    range: NSRange,
+                                    palette: ThemePalette,
+                                    codeFont: NSFont,
+                                    bodyFont: NSFont,
+                                    skip: (NSRange) -> Bool) {
+        let nsStr = str as NSString
+        let separatorRE = try? NSRegularExpression(
+            pattern: #"^[ \t]*\|?[ \t]*:?-{3,}:?(?:[ \t]*\|[ \t]*:?-{3,}:?)+[ \t]*\|?[ \t]*$"#)
+        guard let separatorRE else { return }
+
+        // Walk lines, find separator lines, then expand up (header) and down (body).
+        var idx = range.location
+        let end = NSMaxRange(range)
+        while idx < end {
+            let lineRange = nsStr.lineRange(for: NSRange(location: idx, length: 0))
+            let lineStr = nsStr.substring(with: lineRange)
+            let lineNoNewline = lineStr.trimmingCharacters(in: CharacterSet.newlines)
+            let lineLen = (lineNoNewline as NSString).length
+            let trimRange = NSRange(location: 0, length: lineLen)
+
+            if separatorRE.firstMatch(in: lineNoNewline, range: trimRange) != nil {
+                // Header is the line directly above; must contain at least one `|`
+                let prevEnd = lineRange.location
+                if prevEnd == 0 { idx = NSMaxRange(lineRange); continue }
+                let headerLineRange = nsStr.lineRange(
+                    for: NSRange(location: prevEnd - 1, length: 0)
+                )
+                let headerStr = nsStr.substring(with: headerLineRange)
+                if !headerStr.contains("|") { idx = NSMaxRange(lineRange); continue }
+
+                let tableStart = headerLineRange.location
+                var tableEnd = NSMaxRange(lineRange)
+                // Body lines: while next line still has a `|` and is not blank.
+                var cursor = tableEnd
+                while cursor < end {
+                    let next = nsStr.lineRange(for: NSRange(location: cursor, length: 0))
+                    let nextStr = nsStr.substring(with: next)
+                        .trimmingCharacters(in: CharacterSet.newlines)
+                    if nextStr.isEmpty || !nextStr.contains("|") { break }
+                    tableEnd = NSMaxRange(next)
+                    cursor = tableEnd
+                }
+
+                let tableRange = NSRange(location: tableStart, length: tableEnd - tableStart)
+                if !skip(tableRange) {
+                    styleTable(storage: storage,
+                               nsStr: nsStr,
+                               headerLineRange: headerLineRange,
+                               separatorLineRange: lineRange,
+                               tableRange: tableRange,
+                               palette: palette,
+                               codeFont: codeFont,
+                               bodyFont: bodyFont)
+                }
+
+                idx = tableEnd
+            } else {
+                idx = NSMaxRange(lineRange)
+                if lineRange.length == 0 { break }
+            }
+        }
+    }
+
+    private static func styleTable(storage: NSTextStorage,
+                                   nsStr: NSString,
+                                   headerLineRange: NSRange,
+                                   separatorLineRange: NSRange,
+                                   tableRange: NSRange,
+                                   palette: ThemePalette,
+                                   codeFont: NSFont,
+                                   bodyFont: NSFont) {
+        // Whole table: monospace + tinted background (matches code-block treatment).
+        storage.addAttribute(.font, value: codeFont, range: tableRange)
+        storage.addAttribute(.backgroundColor, value: palette.codeBackground, range: tableRange)
+
+        // Header row: bold.
+        let baseHeaderFont = (storage.attribute(.font,
+                                                at: headerLineRange.location,
+                                                effectiveRange: nil) as? NSFont) ?? codeFont
+        let bold = NSFontManager.shared.convert(baseHeaderFont, toHaveTrait: .boldFontMask)
+        storage.addAttribute(.font, value: bold, range: headerLineRange)
+
+        // Separator row: collapse to a hairline so it doesn't visually clutter
+        // the rendered table; column separators come from drawTablePipes.
+        let para = NSMutableParagraphStyle()
+        para.maximumLineHeight = 0.01
+        para.minimumLineHeight = 0.01
+        para.paragraphSpacing = 0
+        para.paragraphSpacingBefore = 0
+        storage.addAttribute(.paragraphStyle, value: para, range: separatorLineRange)
+        storage.addAttribute(.foregroundColor, value: NSColor.clear, range: separatorLineRange)
+        let charWidth = ("M" as NSString).size(withAttributes: [.font: codeFont]).width
+        storage.addAttribute(.kern, value: NSNumber(value: -Double(charWidth)),
+                             range: separatorLineRange)
+
+        // Mark every `|` in the table (other than the separator row) as a pipe.
+        // Hide the glyph and stash a draw flag so drawTablePipes can render a
+        // 1pt vertical line through each pipe's bounding rect — stacking them
+        // forms continuous column separators.
+        var i = tableRange.location
+        let end = NSMaxRange(tableRange)
+        while i < end {
+            if NSLocationInRange(i, separatorLineRange) {
+                i += 1
+                continue
+            }
+            if nsStr.character(at: i) == 0x7C { // '|'
+                let r = NSRange(location: i, length: 1)
+                storage.addAttribute(.foregroundColor, value: NSColor.clear, range: r)
+                storage.addAttribute(.mtdTablePipe, value: true, range: r)
+                storage.addAttribute(.mtdTablePipeColor, value: palette.tableBorderColor, range: r)
+            }
+            i += 1
         }
     }
 

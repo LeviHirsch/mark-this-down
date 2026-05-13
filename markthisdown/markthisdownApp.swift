@@ -13,6 +13,10 @@ struct ThemePalette {
     let blockquoteBackground: NSColor
     let hrColor: NSColor
     let frontmatterColor: NSColor
+    let pathColor: NSColor
+    let tagColor: NSColor
+    let tableBorderColor: NSColor
+    let lineNumberColor: NSColor
 
     let renderedBodyFont: NSFont
     let rawBodyFont: NSFont
@@ -75,6 +79,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         blockquoteBackground: NSColor(white: 0.0, alpha: 0.04),
         hrColor: NSColor(white: 0.78, alpha: 1),
         frontmatterColor: NSColor(white: 0.50, alpha: 1),
+        pathColor: NSColor(calibratedRed: 0.07, green: 0.55, blue: 0.51, alpha: 1),
+        tagColor: NSColor(calibratedRed: 0.55, green: 0.27, blue: 0.68, alpha: 1),
+        tableBorderColor: NSColor(white: 0.72, alpha: 1),
+        lineNumberColor: NSColor(white: 0.55, alpha: 1),
         renderedBodyFont: renderedBody,
         rawBodyFont: rawBody,
         codeFont: codeFont,
@@ -93,6 +101,10 @@ enum AppTheme: String, CaseIterable, Identifiable {
         blockquoteBackground: NSColor(white: 1.0, alpha: 0.04),
         hrColor: NSColor(white: 0.40, alpha: 1),
         frontmatterColor: NSColor(white: 0.55, alpha: 1),
+        pathColor: NSColor(calibratedRed: 0.45, green: 0.85, blue: 0.78, alpha: 1),
+        tagColor: NSColor(calibratedRed: 0.83, green: 0.62, blue: 0.96, alpha: 1),
+        tableBorderColor: NSColor(white: 0.45, alpha: 1),
+        lineNumberColor: NSColor(white: 0.50, alpha: 1),
         renderedBodyFont: renderedBody,
         rawBodyFont: rawBody,
         codeFont: codeFont,
