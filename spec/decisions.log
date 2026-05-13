@@ -27,6 +27,14 @@
 
 ---
 
+## 2026-05-08 — Spec converged
+
+**Decision:** Converged at a3769da on 2026-05-08.
+
+**Rationale:** User declared convergence directly after one structural revision. Revision addressed all review concerns; a second review pass was deemed unnecessary given the scope and maturity of the spec.
+
+---
+
 ## 2026-05-08 — Frontmatter toggle: unified add/collapse/expand affordance
 
 **Decision:** The frontmatter affordance in `ReadingTextView` is a single toggle button with two states: "Add frontmatter" (when no frontmatter block exists) and "Collapse/Expand frontmatter" (when a frontmatter block exists). The button is always visible; its label and action change based on document state.
@@ -49,3 +57,18 @@
 - Treat the constraint as banning only full Markdown renderers (e.g., cmark, Down), not lightweight grammar/token libraries — adopted as working interpretation, flagged as open question.
 
 **Rationale:** Interview intent is clear (it's in-scope); constraint needs a `/spec decide` to resolve the engine question before implementation.
+
+---
+
+## DEC-001 — 2026-05-13 17:13 — File-path coloring uses pattern-based detection
+**Iteration:** 1
+**Decision:** File-path coloring uses pattern-based detection, not a curated extension allowlist. A token is colored as a file-path/link when it (a) starts with `./`, `~/`, or `/`, OR (b) ends with a generic extension pattern matching `\.[A-Za-z0-9]{1,6}\b`, OR (c) is a URL matching `https?://…`.
+**Rationale:** A curated allowlist is brittle — it requires editing and re-shipping the app every time a new file type appears. The detection goal is "looks like a path or link," which a generic extension pattern captures without maintenance. False positives on prose like version numbers are tolerable.
+**Alternatives considered:**
+  - Curated extension allowlist (`.md`, `.swift`, …) — rejected: brittle, requires maintenance for every new format.
+  - Color any `.`-containing token regardless of shape — rejected: too noisy, would color version numbers, decimals, abbreviations.
+  - User-configurable extension list — rejected: overkill for this iteration; adds a settings surface for a problem that pattern matching already solves.
+**Related:** AC10.1
+**Context:** Resolving the Phase 3 open question (file-path extension allowlist) before `/spec implement` kickoff.
+
+---

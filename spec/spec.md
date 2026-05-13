@@ -1,9 +1,9 @@
 # markthisdown — Specification (iteration 1)
 
 > Status: draft
-> Revision: 2
+> Revision: 3
 > Prior iteration: brownfield — no prior iteration through this skill
-> Last updated: 2026-05-08
+> Last updated: 2026-05-10
 
 ## Motivation
 
@@ -33,6 +33,8 @@ Formalize the spec for an existing system and surface any code/spec drift. The p
 - File-path and `[bracket-tag]` coloring in SyntaxHighlighter.
 - Line numbers in raw mode — reserved left margin, wrap-aware.
 - Outline view — left-side toggle panel showing document headings; saves and restores scroll position on toggle.
+- Image paste: pasting an image inserts a Markdown image reference rather than embedding pixel data. Behavior varies by pasteboard source — see AC17 and open questions.
+- `mtd` CLI tool: a bundled command-line tool; `mtd -n` opens a new blank document. Architecture and install mechanism TBD — see AC18 and open questions.
 
 ### Modified
 - `Info.plist` CFBundleShortVersionString: "1.2" → "2.0.12". `[build-change-todo]`
@@ -88,6 +90,8 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - Outline view opens, lists headings, and scroll position is restored on close.
 - Sidebar card click scrolls the editor to the comment's location.
 - Comment insert/edit/delete/navigate workflow produces no data loss in normal use.
+- Pasting an image (file-on-disk source) inserts a Markdown image reference; raw pixel data is never embedded.
+- `mtd -n` from the terminal opens a new blank document.
 - No previously-working behavior listed in Invariants is broken.
 
 ## Out of scope
@@ -95,7 +99,7 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - Threaded comments.
 - `@`-sigil or `TODO:`/`CITE:`-prefix typed comments.
 - Custom `.mtd` file extension.
-- Brew tap or package distribution.
+- Brew tap or package distribution of the CLI (the bundled CLI tool itself is in scope; distribution via Homebrew is not).
 - Git remote / cloud sync.
 - In-document search (deferred — D-001).
 - Code-block token-level syntax highlighting (not in scope; block-level monospace styling is existing behavior covered by AC14.4).
@@ -193,6 +197,19 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 ### AC16. Scroll preservation across highlight recompute `[adopted]`
 - AC16.1. After any text change triggering `applyHighlighting`, the visible scroll position does not jump. `[adopted]`
 
+### AC17. Image paste inserts a Markdown reference `[delta]`
+- AC17.1. When the pasteboard contains a file URL pointing to an image file, paste inserts `![](path)` at the cursor, where `path` is the file URL's path. `[delta]`
+- AC17.2. When the pasteboard contains only raw image data (screenshot, web copy — no file URL), the exact behavior (save-and-insert vs. no-op vs. placeholder) is resolved via `/spec decide` during implementation. `[delta]`
+- AC17.3. Default NSTextView behavior of embedding raw image data into the text storage is suppressed in all cases. `[delta]`
+- AC17.4. Whether the inserted path is absolute or relative to the document file is resolved via `/spec decide` during implementation. `[delta]`
+
+### AC18. `mtd` CLI tool `[delta]`
+- AC18.1. A command-line executable named `mtd` is bundled inside the app (e.g., `Contents/MacOS/mtd`). `[delta]`
+- AC18.2. `mtd -n` opens a new blank `.md` document — launching the app if not running, or targeting the running instance if it is. `[delta]`
+- AC18.3. The mechanism by which the CLI communicates with or activates the app (URL scheme, XPC, `open` with arguments, AppleScript, etc.) is resolved via `/spec decide` during implementation. `[delta]`
+- AC18.4. The install mechanism (menu item that symlinks to `/usr/local/bin/mtd`, manual step in README, etc.) is resolved via `/spec decide` during implementation. `[delta]`
+- AC18.5. Additional `mtd` subcommands beyond `-n` are out of scope for this iteration.
+
 ## Implementation phases
 
 ### Phase 1. Bug fixes (Phase A build-change-todos)
@@ -224,6 +241,22 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 **Depends on:** Phase 1 (stable document state and scroll preservation)
 - AC12.1, AC12.2, AC12.3, AC12.4, AC12.5
 
+### Phase 5. Image paste
+**Delivers:** Pasting an image inserts a Markdown reference instead of embedding pixel data.
+**Depends on:** Phase 1 (stable NSTextView baseline)
+**Note:** Two `/spec decide` questions must be resolved before implementation: raw-image-data behavior (AC17.2) and absolute vs. relative path (AC17.4).
+- AC17.1, AC17.2, AC17.3, AC17.4
+
+### Phase 6. `mtd` CLI tool
+**Delivers:** Bundled CLI; `mtd -n` opens a new blank document.
+**Depends on:** Phase 1 (app stability)
+**Note:** Two `/spec decide` questions must be resolved before implementation: communication mechanism (AC18.3) and install mechanism (AC18.4).
+- AC18.1, AC18.2, AC18.3, AC18.4, AC18.5
+
 ## Open questions
 
 - **File-path extension allowlist (AC10.1):** Detection rule is defined (starts with `./`, `~/`, `/`, or ends with a recognized extension), but the recognized extension list must be defined via `/spec decide` before Phase 3 implementation begins.
+- **Image paste — raw data behavior (AC17.2):** When the pasteboard has only pixel data (screenshot, web copy), what happens? Options: save image to `./images/` and insert path; insert a placeholder string; no-op. Resolve via `/spec decide` at Phase 5 start.
+- **Image paste — path style (AC17.4):** When a file URL is available, should the inserted path be absolute or relative to the document's location? Resolve via `/spec decide` at Phase 5 start.
+- **CLI communication mechanism (AC18.3):** How does `mtd -n` activate the running app? Options: custom URL scheme (`mtd://new`), XPC service, `open -a MarkThisDown --args -n` with `application(_:open:)`, AppleScript. Resolve via `/spec decide` at Phase 6 start.
+- **CLI install mechanism (AC18.4):** How does `mtd` get onto the user's PATH? Options: "Install CLI Tool" menu item that symlinks `Contents/MacOS/mtd → /usr/local/bin/mtd`; manual README instruction; post-install script. Resolve via `/spec decide` at Phase 6 start.
