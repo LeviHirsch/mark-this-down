@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 enum DisplayMode { case rendered, raw }
 enum SaveState { case untitled, autosaving, saved }
@@ -118,6 +119,10 @@ struct ContentView: View {
     @State private var comments: [MTDComment] = []
     @State private var jumpToken: EditorJumpToken? = nil
     @State private var frontmatterCollapsed: Bool = false
+    @State private var showOutline: Bool = false
+    @State private var headings: [MTDHeading] = []
+    @State private var outlineJumped: Bool = false
+    @StateObject private var scrollBridge = EditorScrollBridge()
     @AppStorage("appTheme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("fontScale") private var fontScale: Double = 1.0
 
@@ -141,17 +146,31 @@ struct ContentView: View {
     }
 
     var body: some View {
-        MarkdownEditor(text: $document.text,
-                       mode: mode,
-                       palette: palette,
-                       scale: CGFloat(fontScale),
-                       commentRanges: comments.map { $0.range },
-                       frontmatterCollapsed: frontmatterCollapsed && hasFrontmatter,
-                       jumpToken: jumpToken,
-                       onCommentTap: { location in
-                           focusedCommentLocation = location
-                           showSidebar = true
-                       })
+        HStack(spacing: 0) {
+            ActivityBar(showOutline: $showOutline,
+                        palette: palette,
+                        onToggleOutline: toggleOutline)
+            if showOutline {
+                OutlineView(headings: headings,
+                            palette: palette,
+                            onSelect: jumpToHeading,
+                            onClose: toggleOutline)
+                    .frame(width: 240)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            MarkdownEditor(text: $document.text,
+                           mode: mode,
+                           palette: palette,
+                           scale: CGFloat(fontScale),
+                           commentRanges: comments.map { $0.range },
+                           frontmatterCollapsed: frontmatterCollapsed && hasFrontmatter,
+                           jumpToken: jumpToken,
+                           scrollBridge: scrollBridge,
+                           onCommentTap: { location in
+                               focusedCommentLocation = location
+                               showSidebar = true
+                           })
+        }
             .navigationSubtitle(statusText)
             .inspector(isPresented: $showSidebar) {
                 CommentsSidebar(
@@ -263,10 +282,12 @@ struct ContentView: View {
             .onAppear {
                 recomputeStateForFileURL()
                 comments = MTDComment.parse(document.text)
+                headings = parseHeadings(document.text)
             }
             .onChange(of: fileURL) { _, _ in recomputeStateForFileURL() }
             .onChange(of: document.text) { _, newText in
                 comments = MTDComment.parse(newText)
+                headings = parseHeadings(newText)
                 guard fileURL != nil else { return }
                 saveState = .autosaving
                 debounceTask?.cancel()
@@ -290,6 +311,32 @@ struct ContentView: View {
                     focusedCommentLocation = loc
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .mtdToggleOutline)) { _ in
+                toggleOutline()
+            }
+    }
+
+    private func toggleOutline() {
+        if showOutline {
+            if outlineJumped {
+                scrollBridge.discard()
+            } else {
+                scrollBridge.restore()
+            }
+            outlineJumped = false
+            showOutline = false
+        } else {
+            scrollBridge.save()
+            showOutline = true
+        }
+    }
+
+    private func jumpToHeading(_ h: MTDHeading) {
+        jumpToken = EditorJumpToken(
+            location: h.location,
+            nonce: (jumpToken?.nonce ?? 0) + 1
+        )
+        outlineJumped = true
     }
 
     private var zoomLabel: String {
@@ -1060,6 +1107,7 @@ struct MarkdownEditor: NSViewRepresentable {
     let commentRanges: [NSRange]
     let frontmatterCollapsed: Bool
     let jumpToken: EditorJumpToken?
+    let scrollBridge: EditorScrollBridge
     let onCommentTap: (Int) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -1103,6 +1151,7 @@ struct MarkdownEditor: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.documentView = tv
+        scrollBridge.scrollView = scroll
 
         let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
         scroll.verticalRulerView = ruler
@@ -1131,6 +1180,7 @@ struct MarkdownEditor: NSViewRepresentable {
         guard let tv = scroll.documentView as? ReadingTextView else { return }
         context.coordinator.parent = self
         tv.onCommentTap = onCommentTap
+        if scrollBridge.scrollView !== scroll { scrollBridge.scrollView = scroll }
         applyAppearance(to: tv)
         if tv.string != text {
             Self.smartReplace(in: tv, with: text)
@@ -1929,5 +1979,215 @@ struct HelpView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Outline model
+
+struct MTDHeading: Identifiable, Equatable {
+    let id: Int        // line-start location, stable within a single parse cycle
+    let level: Int     // 1...6
+    let text: String
+    let location: Int  // character offset of the heading line start
+}
+
+func parseHeadings(_ text: String) -> [MTDHeading] {
+    let ns = text as NSString
+    if ns.length == 0 { return [] }
+    let fm = frontmatterRange(in: text)
+    let fences = mtdFindFenceRangesForOutline(text)
+
+    guard let re = try? NSRegularExpression(
+        pattern: #"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$"#,
+        options: [.anchorsMatchLines]
+    ) else { return [] }
+
+    let full = NSRange(location: 0, length: ns.length)
+    var out: [MTDHeading] = []
+    re.enumerateMatches(in: text, range: full) { m, _, _ in
+        guard let m = m else { return }
+        let loc = m.range.location
+        if let fm = fm, NSLocationInRange(loc, fm) { return }
+        if fences.contains(where: { NSLocationInRange(loc, $0) }) { return }
+        let hashes = ns.substring(with: m.range(at: 1))
+        let title = ns.substring(with: m.range(at: 2))
+            .trimmingCharacters(in: .whitespaces)
+        out.append(MTDHeading(id: loc, level: hashes.count,
+                              text: title, location: loc))
+    }
+    return out
+}
+
+fileprivate func mtdFindFenceRangesForOutline(_ text: String) -> [NSRange] {
+    guard let re = try? NSRegularExpression(
+        pattern: #"^```[\s\S]*?^```[ \t]*$"#,
+        options: [.anchorsMatchLines]
+    ) else { return [] }
+    let ns = text as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    var ranges: [NSRange] = []
+    re.enumerateMatches(in: text, range: full) { m, _, _ in
+        if let m = m { ranges.append(m.range) }
+    }
+    return ranges
+}
+
+// MARK: - Editor scroll bridge
+//
+// Lets ContentView capture and restore the editor's clipView origin around
+// open/close of the outline panel (AC12.4). The MarkdownEditor wires the
+// scroll view weakly into the bridge on makeNSView.
+
+@MainActor
+final class EditorScrollBridge: ObservableObject {
+    weak var scrollView: NSScrollView?
+    private var saved: NSPoint?
+
+    func save() {
+        guard let sv = scrollView else { return }
+        saved = sv.contentView.bounds.origin
+    }
+    func restore() {
+        guard let pt = saved, let sv = scrollView else { saved = nil; return }
+        saved = nil
+        sv.contentView.scroll(to: pt)
+        sv.reflectScrolledClipView(sv.contentView)
+    }
+    func discard() { saved = nil }
+}
+
+// MARK: - Activity Bar (leading in-window vertical button strip)
+
+struct ActivityBar: View {
+    @Binding var showOutline: Bool
+    let palette: ThemePalette
+    let onToggleOutline: () -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Button(action: onToggleOutline) {
+                Image(systemName: "list.bullet.indent")
+                    .font(.system(size: 16, weight: .regular))
+                    .frame(width: 30, height: 30)
+                    .foregroundStyle(
+                        showOutline
+                            ? Color.accentColor
+                            : Color(palette.secondaryColor)
+                    )
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(showOutline
+                                  ? Color.accentColor.opacity(0.15)
+                                  : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Toggle outline (⌘⇧O)")
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .frame(width: 40)
+        .frame(maxHeight: .infinity)
+        .background(
+            Color(palette.background)
+                .overlay(Color.gray.opacity(palette.isDark ? 0.08 : 0.05))
+        )
+        .overlay(
+            Rectangle()
+                .fill(Color.gray.opacity(palette.isDark ? 0.25 : 0.15))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+}
+
+// MARK: - Outline View
+
+struct OutlineView: View {
+    let headings: [MTDHeading]
+    let palette: ThemePalette
+    let onSelect: (MTDHeading) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Outline")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .help("Close outline")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if headings.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "number")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No headings yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(headings) { h in
+                            OutlineRow(heading: h, palette: palette,
+                                       onSelect: { onSelect(h) })
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .background(Color(palette.background))
+        .overlay(
+            Rectangle()
+                .fill(Color.gray.opacity(palette.isDark ? 0.25 : 0.15))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+}
+
+struct OutlineRow: View {
+    let heading: MTDHeading
+    let palette: ThemePalette
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 0) {
+                Text(heading.text)
+                    .font(.system(
+                        size: 12.5,
+                        weight: heading.level <= 1 ? .semibold
+                              : heading.level == 2 ? .medium
+                              : .regular
+                    ))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(Color(palette.bodyColor))
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, CGFloat(heading.level - 1) * 12 + 10)
+            .padding(.trailing, 10)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

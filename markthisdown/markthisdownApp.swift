@@ -176,6 +176,11 @@ struct MarkThisDownApp: App {
                     NotificationCenter.default.post(name: .mtdToggleSidebar, object: nil)
                 }
                 .keyboardShortcut("\\", modifiers: .command)
+
+                Button("Toggle Outline View") {
+                    NotificationCenter.default.post(name: .mtdToggleOutline, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
             }
         }
     }
@@ -186,4 +191,5 @@ extension Notification.Name {
     static let mtdInsertFrontmatter = Notification.Name("mtdInsertFrontmatter")
     static let mtdToggleSidebar = Notification.Name("mtdToggleSidebar")
     static let mtdCommentAdded = Notification.Name("mtdCommentAdded")
+    static let mtdToggleOutline = Notification.Name("mtdToggleOutline")
 }
