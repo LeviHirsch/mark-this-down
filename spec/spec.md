@@ -132,9 +132,9 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 
 ### AC6. Frontmatter toggle `[delta]`
 - AC6.1. `ReadingTextView` shows a persistent toggle button whose label and action depend on document state. The button's visual form and placement are decided at implementation time. `[delta]`
-- AC6.2. When no frontmatter block exists, the button reads "Add frontmatter"; activating it inserts a minimal `---\n---` block at the document top and leaves it expanded. `[delta]`
+- AC6.2. When no frontmatter block exists, the button reads "Add frontmatter"; activating it inserts a starter frontmatter block at the document top with placeholder `title:`, `date: <today>`, and `tags:` fields, and leaves it expanded. `[delta]`
 - AC6.3. When a frontmatter block exists, the button reads "Collapse" or "Expand" depending on current collapse state. `[delta]`
-- AC6.4. Activating "Collapse" hides the frontmatter body lines; a single summary line (e.g., "frontmatter") remains visible. `[delta]`
+- AC6.4. Activating "Collapse" hides the entire frontmatter block in rendered mode — opening `---` delimiter, content lines, and closing `---` delimiter all become invisible with no remaining row. The frontmatter remains present in `document.text` and is fully visible in raw mode regardless of collapse state. `[delta]`
 - AC6.5. Activating "Expand" restores all frontmatter lines; collapse/expand state does not modify `document.text`. `[delta]`
 
 ### AC7. ⌘' blocked inside frontmatter `[delta]`
@@ -160,34 +160,35 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - AC11.1. In raw mode, a reserved left margin displays line numbers for each logical line of the document. `[delta]`
 - AC11.2. When a logical line wraps across multiple visual rows, only the first visual row is numbered; continuation rows show no number. `[delta]`
 - AC11.3. Line numbers are not visible in rendered mode. `[delta]`
+- AC11.4. The gutter's reserved width is preserved in rendered mode — the gutter itself is invisible, but the horizontal space it occupies remains, so toggling between raw and rendered modes does not horizontally reposition the document text. `[delta]`
+- AC11.5. The gutter is positioned relative to the left edge of the text content area, not relative to the window or scroll-view edge; it sits immediately adjacent to the text. `[delta]`
 
 ### AC12. Outline view `[delta]`
 - AC12.1. A toggle button opens/closes a left-side panel listing all ATX headings (`#`–`######`) in document order. The toggle mechanism and panel placement are decided at implementation time. `[delta]`
 - AC12.2. Each outline entry shows heading level (indented) and text. `[delta]`
-- AC12.3. Clicking an outline entry scrolls the editor to that heading and moves the cursor to it. `[delta]`
+- AC12.3. Clicking an outline entry scrolls the editor to that heading and places the cursor at the start of the heading text (past the `#` markers and their separating whitespace). `[delta]`
 - AC12.4. Opening the outline view saves the current scroll position; closing restores it. `[delta]`
 - AC12.5. Outline list updates when headings are added, removed, or renamed. `[delta]`
 
 ### AC13. Core comment workflow is preserved `[adopted]`
 - AC13.1. ⌘' on an empty mid-line selection inserts inline `<!--  -->` with cursor inside the spaces. `[adopted]`
-- AC13.2. ⌘' on an empty structural-line selection inserts a block-above comment with a newline. `[adopted]`
+- AC13.2. ⌘' on an empty selection on a structural line (heading `#{1,6} `, list item `[-*+] ` or `\d+\. `, blockquote `> `) follows a cursor-position-aware rule: if the cursor is in the marker zone (positions 0..N where N is the offset of the first text character past the marker and its separating whitespace), the comment is inserted at end-of-line with a leading space; otherwise the comment is inserted inline at the cursor position with a leading space if not already preceded by whitespace. `[delta]`
 - AC13.3. ⌘' on a selection without a newline inserts inline comment after selection. `[adopted]`
 - AC13.4. ⌘' on a selection containing a newline inserts a block-above comment. `[adopted]`
 - AC13.5. Comment body edits commit on blur; Esc reverts; Enter confirms; Shift/Cmd+Enter inserts newline. `[adopted]`
 - AC13.6. Per-card delete button removes the comment from document text. `[adopted]`
 
 ### AC14. Markdown rendering baseline is preserved `[adopted]`
-- AC14.1. Headings h1–h6 render with correct relative sizes scaled by zoom factor; `#` markers hidden off-cursor. `[adopted]`
+- AC14.1. Headings h1–h6 render with correct relative sizes scaled by zoom factor; the `#` markers *and the whitespace separating them from the heading text* are hidden off-cursor. `[adopted]`
 - AC14.2. Bold (`**...**`) and italic (`*...*` / `_..._`) render with markers hidden off-cursor. `[adopted]`
 - AC14.3. Inline code renders with monospace font and tinted background; backtick markers hidden. `[adopted]`
-- AC14.4. Fenced code blocks render with monospace font and tinted background. `[adopted]`
+- AC14.4. Fenced code blocks render with monospace font and tinted background; the triple-backtick delimiter lines are hidden off-cursor and reappear (in muted color) when the cursor is inside the fence. `[adopted]`
 - AC14.5. Blockquotes render with 4% tint background and 3pt left bar; `>` marker hidden off-cursor. `[adopted]`
 - AC14.6. HR renders as full-width 1pt line; source text hidden. `[adopted]`
 - AC14.7. Unordered list bullets render as `•` in secondary color; `-`/`*`/`+` markers hidden. `[adopted]`
 - AC14.8. Markdown links render with link text colored and URL muted. `[adopted]`
 - AC14.9. Bare URLs are detected and colored via NSDataDetector. `[adopted]`
 - AC14.10. Frontmatter block renders in italic gray. `[adopted]`
-- AC14.11. Standalone comment lines leave no blank space in rendered mode (line height 0.01). `[adopted]`
 
 ### AC15. Theme and zoom controls are preserved `[adopted]`
 - AC15.1. ⌘E cycles theme (system → light → dark → system). `[adopted]`
@@ -234,7 +235,7 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 **Note:** Resolve file-path extension allowlist via `/spec decide` before starting this phase.
 - AC9.1, AC9.2
 - AC10.1, AC10.2, AC10.3
-- AC11.1, AC11.2, AC11.3
+- AC11.1, AC11.2, AC11.3, AC11.4, AC11.5
 
 ### Phase 4. Outline view
 **Delivers:** Left-panel outline listing headings; click-to-jump; scroll restore on close.

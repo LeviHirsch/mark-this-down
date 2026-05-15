@@ -1,12 +1,12 @@
 schema_version: 1
 iteration: 1
 mode: adopted
-phase: verified
+phase: revised
 started_at: "2026-05-06T20:12:00"
-last_command: /spec implement
-last_command_at: "2026-05-13T19:23:00"
+last_command: /spec reconcile
+last_command_at: "2026-05-15T18:05:00"
 spec_sha: 53665556063768d6ef1e66b01bbf1c4eacd745e9
 latest_interview: v001-2026-05-06-2012-interview.md
 latest_review_stamp: v001-2026-05-08-0102
 latest_verify: v001-2026-05-13-0129-verify.md
-phases_implemented: [1, 2, 3, 4]
+phases_implemented: [1, 2, 4]

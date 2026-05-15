@@ -72,3 +72,26 @@
 **Context:** Resolving the Phase 3 open question (file-path extension allowlist) before `/spec implement` kickoff.
 
 ---
+
+## DEC-002 — 2026-05-15 17:39 — Comment placement on structural lines is cursor-position-aware
+**Iteration:** 1
+**Decision:** When `⌘'` is pressed with an empty selection on a structural line (heading `#{1,6} `, list item `[-*+] ` or `\d+\. `, blockquote `> `), insertion location depends on cursor position: cursor in the marker zone (positions 0..N where N is the first text-char offset) → insert at end of the structural line with a leading space; cursor past the marker zone (text portion) → insert inline at cursor with a leading space if not already preceded by whitespace. Non-structural lines and non-empty selections retain existing behavior (multi-line selection → block-above; single-line selection → inline after selection). Outline-title parsing strips `<!-- ... -->` runs and the whitespace immediately preceding them.
+**Rationale:** Preserves D-004's parsing-safety intent (no comment fragments the marker portion of a structural line) while allowing inline placement next to specific words in the text portion. Eliminates the all-structural-lines-block-above heuristic and the renderer's "collapse comment-only-line-above-structural" special case — comment-only lines always render as visible blank rows.
+**Alternatives considered:**
+  - All structural lines → block-above (D-004 prior interpretation) — rejected: prevents word-level inline placement on bullets/headings, and inserts a row above structural lines that disrupted icon-anchoring.
+  - All structural lines → always EOL — rejected: loses inline-mid-text placement on bullets, which is desired for word-specific annotations.
+  - Cursor-zone aware with marker-zone → above-line — rejected: solves parsing safety but still inserts a separate row that the renderer must collapse; EOL placement removes the entire collapse-heuristic surface area.
+**Supersedes:** D-004
+**Related:** AC8.1, AC8.2, AC12.5
+**Context:** Surfaced during iteration-1 post-verify hand-testing; user reported the block-above icon-misalignment symptom and explicitly requested a redesign of structural-line comment placement.
+
+---
+
+## DEC-003 — 2026-05-15 18:05 — Raw-mode rendering polish: codeFont sizing, gutter alignment, gutter scroll-sync
+**Iteration:** 1
+**Decision:** Three non-AC-load-bearing implementation choices made during iteration-1 hand-testing: (a) `codeFont` is bumped from 13.5pt to 14pt monospaced to match `rawBody` so code-block lines and surrounding raw text share the same line height; (b) the `LineNumberRulerView` no longer adds both `textContainerOrigin.y` and `textContainerInset.height` — these were double-counting the same vertical offset, shifting gutter numbers downward by `verticalPadding` (32pt); (c) the gutter ruler now observes `NSView.boundsDidChangeNotification` on the scroll view's `contentView` so it redraws on every scroll tick (with `allowsNonContiguousLayout = true`, the layout manager can return stale fragment rects mid-scroll).
+**Rationale:** All three are bug fixes for raw-mode gutter rendering. None of AC11.1–AC11.3 (or any other AC) pinned these specific numbers/mechanisms; the choices live in the implementation layer.
+**Related:** AC11.1, AC11.2, AC11.3, AC14.4
+**Context:** Auto-logged during /spec reconcile (iteration 1); bucket-1 (decision-only) drift items B, C, D.
+
+---
