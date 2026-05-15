@@ -1,11 +1,11 @@
 schema_version: 1
 iteration: 1
 mode: adopted
-phase: revised
+phase: converged
 started_at: "2026-05-06T20:12:00"
-last_command: /spec reconcile
-last_command_at: "2026-05-15T18:05:00"
-spec_sha: 53665556063768d6ef1e66b01bbf1c4eacd745e9
+last_command: /spec check
+last_command_at: "2026-05-15T18:13:00"
+spec_sha: c33531ed9d06327abdd5a59bfb6963ee085edf18
 latest_interview: v001-2026-05-06-2012-interview.md
 latest_review_stamp: v001-2026-05-08-0102
 latest_verify: v001-2026-05-13-0129-verify.md

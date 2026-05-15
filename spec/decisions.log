@@ -95,3 +95,11 @@
 **Context:** Auto-logged during /spec reconcile (iteration 1); bucket-1 (decision-only) drift items B, C, D.
 
 ---
+
+## DEC-004 — 2026-05-15 18:13 — Spec converged at c33531e
+**Iteration:** 1
+**Decision:** Spec converged at c33531e on 2026-05-15.
+**Rationale:** The most recent revision (the reconcile commit) introduced structural changes (AC6.4 / AC13.2 assertions changed, AC14.11 deleted, AC11.4 / AC11.5 added, Phase 3 AC list updated) — strictly not wording-only by the convergence rule. However, the goals were unchanged, and every structural change reverse-engineered an already-implemented behavior or codified a polish requirement that the code path already supports. User judgment: a fresh persona-review pass would be ceremony without meaningful critique surface, since the implementation has already settled. Override applied with explicit user acknowledgment.
+**Context:** Auto-logged during /spec check (iteration 1).
+
+---
