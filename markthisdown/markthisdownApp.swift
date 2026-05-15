@@ -65,7 +65,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
 
     private static let renderedBody = NSFont.systemFont(ofSize: 15, weight: .regular)
     private static let rawBody = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-    private static let codeFont = NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular)
+    private static let codeFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
     private static let headingSizes: [CGFloat] = [28, 24, 20, 18, 16, 15]
 
     static let lightPalette = ThemePalette(

@@ -332,8 +332,19 @@ struct ContentView: View {
     }
 
     private func jumpToHeading(_ h: MTDHeading) {
+        // Position the cursor at the start of the heading *text*, not at the
+        // line start (before the `#`s). Walk past `#`s and the separating
+        // whitespace; fall back to the line start if anything looks off.
+        let ns = document.text as NSString
+        var p = h.location
+        let endLoc = ns.length
+        while p < endLoc, ns.character(at: p) == 0x23 { p += 1 } // '#'
+        while p < endLoc {
+            let c = ns.character(at: p)
+            if c == 0x20 || c == 0x09 { p += 1 } else { break }
+        }
         jumpToken = EditorJumpToken(
-            location: h.location,
+            location: p,
             nonce: (jumpToken?.nonce ?? 0) + 1
         )
         outlineJumped = true
@@ -354,7 +365,11 @@ struct ContentView: View {
 
     private func insertFrontmatter() {
         if hasFrontmatter { return }
-        document.text = "---\n---\n\n" + document.text
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        let today = df.string(from: Date())
+        let starter = "---\ntitle: \ndate: \(today)\ntags: \n---\n\n"
+        document.text = starter + document.text
         frontmatterCollapsed = false
     }
 
@@ -970,28 +985,58 @@ final class ReadingTextView: NSTextView {
     private func computeCommentInsertion(in text: String, selection: NSRange) -> InsertionPlan {
         let nsText = text as NSString
 
-        // Empty selection
+        // Empty selection — DEC-002 cursor-position-aware rule.
         if selection.length == 0 {
             let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
             let lineText = nsText.substring(with: lineRange)
-                .trimmingCharacters(in: CharacterSet.newlines)
-            // Block-above behavior when cursor is on a structural line:
-            //   #  (heading), -/*/+ (list), > (quote), 1. (numbered)
-            let structuralPattern = #"^[ \t]*(#{1,6}\s|[-*+]\s|>\s?|\d+\.\s)"#
-            if lineText.range(of: structuralPattern, options: .regularExpression) != nil {
-                let template = "<!--  -->\n"
-                return InsertionPlan(
-                    insertion: template,
-                    insertion_location: lineRange.location,
-                    cursor_location: lineRange.location + 5
-                )
+            // Structural marker: heading `#{1,6} `, bullet `[-*+] `,
+            // numbered `\d+\. `, blockquote `> `. Capture the marker so we
+            // can find the first text-char offset.
+            let markerPattern = #"^[ \t]*(#{1,6}|[-*+]|\d+\.|>)[ \t]+"#
+            if let markerRange = lineText.range(of: markerPattern, options: .regularExpression),
+               markerRange.lowerBound == lineText.startIndex {
+                let markerEndOffset = lineText.distance(from: lineText.startIndex,
+                                                        to: markerRange.upperBound)
+                let firstTextCharLoc = lineRange.location + markerEndOffset
+                let cursor = selection.location
+                if cursor <= firstTextCharLoc {
+                    // Marker zone → insert at end-of-line. Compute EOL = end
+                    // of lineRange minus the trailing newline (if any).
+                    var eol = NSMaxRange(lineRange)
+                    if eol > lineRange.location {
+                        let last = nsText.character(at: eol - 1)
+                        if last == 0x0A { eol -= 1 }
+                    }
+                    let needsLeadingSpace: Bool = {
+                        if eol == lineRange.location { return false }
+                        let prev = nsText.character(at: eol - 1)
+                        return !(prev == 0x20 || prev == 0x09)
+                    }()
+                    let template = needsLeadingSpace ? " <!--  -->" : "<!--  -->"
+                    let cursorOffset = needsLeadingSpace ? 6 : 5
+                    return InsertionPlan(
+                        insertion: template,
+                        insertion_location: eol,
+                        cursor_location: eol + cursorOffset
+                    )
+                }
+                // Past marker zone → fall through to inline-at-cursor below.
             }
-            // Otherwise inline at cursor (works for blank lines too — looks the same as block)
-            let template = "<!--  -->"
+            // Inline at cursor. Leading space if not already preceded by ws.
+            let cursor = selection.location
+            let needsLeadingSpace: Bool = {
+                if cursor == 0 { return false }
+                if cursor > nsText.length { return false }
+                let prev = nsText.character(at: cursor - 1)
+                if prev == 0x0A { return false }
+                return !(prev == 0x20 || prev == 0x09)
+            }()
+            let template = needsLeadingSpace ? " <!--  -->" : "<!--  -->"
+            let cursorOffset = needsLeadingSpace ? 6 : 5
             return InsertionPlan(
                 insertion: template,
-                insertion_location: selection.location,
-                cursor_location: selection.location + 5
+                insertion_location: cursor,
+                cursor_location: cursor + cursorOffset
             )
         }
 
@@ -1062,7 +1107,6 @@ final class LineNumberRulerView: NSRulerView {
         ]
 
         let originY = tv.textContainerOrigin.y
-        let containerInsetY = tv.textContainerInset.height
         var cursor = charRange.location
         let endChar = NSMaxRange(charRange)
 
@@ -1075,8 +1119,9 @@ final class LineNumberRulerView: NSRulerView {
             let fragRect = lm.lineFragmentRect(forGlyphAt: glyphIdx,
                                                effectiveRange: &effective)
 
-            // Convert fragment rect (text-view coords) to ruler coords.
-            let yInTextView = fragRect.minY + originY + containerInsetY
+            // Convert fragment rect (layoutManager coords) to ruler coords.
+            // textContainerOrigin already accounts for textContainerInset.
+            let yInTextView = fragRect.minY + originY
             let yInRuler = yInTextView - visibleRect.minY
 
             let label = "\(lineNumber)" as NSString
@@ -1160,11 +1205,21 @@ struct MarkdownEditor: NSViewRepresentable {
         ruler.lineNumberColor = palette.lineNumberColor
         context.coordinator.ruler = ruler
 
-        // Redraw the gutter on text edits — Cocoa redraws on scroll for free,
-        // but inserts/deletes that don't change the visible-rect bounds need a nudge.
+        // Redraw the gutter on text edits and on every scroll tick.
+        // Cocoa redraws on scroll *most* of the time, but with
+        // allowsNonContiguousLayout = true the layout manager can return stale
+        // fragment rects mid-scroll — observing contentView bounds keeps the
+        // gutter glued to the text.
         NotificationCenter.default.addObserver(
             forName: NSText.didChangeNotification,
             object: tv, queue: .main
+        ) { [weak ruler] _ in
+            ruler?.needsDisplay = true
+        }
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scroll.contentView, queue: .main
         ) { [weak ruler] _ in
             ruler?.needsDisplay = true
         }
@@ -1454,14 +1509,10 @@ enum SyntaxHighlighter {
                 let last = nsStr.character(at: trimmed.location + trimmed.length - 1)
                 if last == 0x0A { trimmed.length -= 1 }
             }
-            if trimmed.location == r.location && trimmed.length == r.length {
-                let para = NSMutableParagraphStyle()
-                para.maximumLineHeight = 0.01
-                para.minimumLineHeight = 0.01
-                para.paragraphSpacing = 0
-                para.paragraphSpacingBefore = 0
-                storage.addAttribute(.paragraphStyle, value: para, range: lineRange)
-            }
+            // DEC-002: comment-only lines always render as a visible blank
+            // row. The block-above-structural-line heuristic was eliminated
+            // when structural-line insertion moved to EOL.
+            _ = trimmed
         }
 
         // 1. Frontmatter
@@ -1471,15 +1522,16 @@ enum SyntaxHighlighter {
             storage.addAttribute(.foregroundColor, value: palette.frontmatterColor, range: m.range)
 
             if frontmatterCollapsed {
-                // Hide everything after the opening `---\n` line; opening delimiter
-                // remains visible as a summary line. State change does not modify
+                // Hide the entire frontmatter block — opening `---`, content,
+                // and closing `---` all disappear. Include the trailing newline
+                // so no blank row remains. State change does not modify
                 // document.text — purely a visual collapse.
                 let nsStr = str as NSString
-                let openingLine = nsStr.lineRange(
-                    for: NSRange(location: m.range.location, length: 0)
+                let closingLine = nsStr.lineRange(
+                    for: NSRange(location: NSMaxRange(m.range) - 1, length: 0)
                 )
-                let hideStart = NSMaxRange(openingLine)
-                let hideEnd = NSMaxRange(m.range)
+                let hideStart = m.range.location
+                let hideEnd = NSMaxRange(closingLine)
                 guard hideStart < hideEnd else { return }
                 let hideRange = NSRange(location: hideStart, length: hideEnd - hideStart)
                 let para = NSMutableParagraphStyle()
@@ -1502,12 +1554,27 @@ enum SyntaxHighlighter {
             fenceRanges.append(m.range)
             storage.addAttribute(.backgroundColor, value: palette.codeBackground, range: m.range)
             storage.addAttribute(.font, value: codeFont, range: m.range)
+            // Hide the opening and closing fence-delimiter lines in rendered
+            // mode — unless the cursor is somewhere inside this fence (in
+            // which case the delimiters reappear so the user can edit them).
+            let cursorInFence = rangeContainsCursor(m.range, cursor: cursorRange)
             (try? NSRegularExpression(pattern: "^```[^\n]*$", options: .anchorsMatchLines))?
                 .enumerateMatches(in: str, range: m.range) { fm, _, _ in
-                    if let fm = fm {
+                    guard let fm = fm else { return }
+                    if cursorInFence {
                         storage.addAttribute(.foregroundColor,
                                              value: palette.codeFenceColor, range: fm.range)
+                        return
                     }
+                    let para = NSMutableParagraphStyle()
+                    para.maximumLineHeight = 0.01
+                    para.minimumLineHeight = 0.01
+                    para.paragraphSpacing = 0
+                    para.paragraphSpacingBefore = 0
+                    storage.addAttribute(.paragraphStyle, value: para, range: fm.range)
+                    storage.addAttribute(.foregroundColor, value: NSColor.clear, range: fm.range)
+                    let cw = ("M" as NSString).size(withAttributes: [.font: codeFont]).width
+                    storage.addAttribute(.kern, value: NSNumber(value: -Double(cw)), range: fm.range)
                 }
         }
 
@@ -1601,10 +1668,23 @@ enum SyntaxHighlighter {
             storage.addAttribute(.font, value: bold, range: m.range)
 
             let lineRange = (str as NSString).lineRange(for: m.range)
+            // Include the whitespace separating `#`s from heading text — it's
+            // part of the heading marker, not the title.
+            let strNS = str as NSString
+            var end = NSMaxRange(hashes)
+            let rangeEnd = NSMaxRange(range)
+            while end < rangeEnd {
+                let c = strNS.character(at: end)
+                if c == 0x20 || c == 0x09 { end += 1 } else { break }
+            }
+            let marker = NSRange(location: hashes.location, length: end - hashes.location)
             if rangeContainsCursor(lineRange, cursor: cursorRange) {
-                storage.addAttribute(.foregroundColor, value: palette.markerColor, range: hashes)
+                storage.addAttribute(.foregroundColor, value: palette.markerColor, range: marker)
             } else {
-                hideRange(storage, range: hashes, in: bodyFont)
+                // Use the heading's actual bold font for kern math so the
+                // separating space — which is wider in the heading font than
+                // in bodyFont — collapses fully.
+                hideRange(storage, range: marker, in: bold)
             }
         }
 
@@ -2010,8 +2090,17 @@ func parseHeadings(_ text: String) -> [MTDHeading] {
         if let fm = fm, NSLocationInRange(loc, fm) { return }
         if fences.contains(where: { NSLocationInRange(loc, $0) }) { return }
         let hashes = ns.substring(with: m.range(at: 1))
-        let title = ns.substring(with: m.range(at: 2))
-            .trimmingCharacters(in: .whitespaces)
+        var title = ns.substring(with: m.range(at: 2))
+        // DEC-002: strip inline HTML comments (and any whitespace that
+        // immediately precedes them) so they don't appear in the outline.
+        if let stripRe = try? NSRegularExpression(
+            pattern: #"[ \t]*<!--.*?-->"#,
+            options: [.dotMatchesLineSeparators]
+        ) {
+            let r = NSRange(location: 0, length: (title as NSString).length)
+            title = stripRe.stringByReplacingMatches(in: title, range: r, withTemplate: "")
+        }
+        title = title.trimmingCharacters(in: .whitespaces)
         out.append(MTDHeading(id: loc, level: hashes.count,
                               text: title, location: loc))
     }
