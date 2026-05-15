@@ -636,6 +636,22 @@ final class ReadingTextView: NSTextView {
 
     var onCommentTap: ((Int) -> Void)?
 
+    // The line-number gutter is a floating subview of the enclosing NSScrollView
+    // (AC11.5). Its width is the *minimum* left inset of the text container so
+    // that the gutter sits flush against the text content area regardless of
+    // window width. updateReadingMargins repositions the gutter after each
+    // layout pass.
+    weak var gutter: LineNumberGutterView?
+
+    /// Current-line highlight is raw-mode only. The coordinator updates these
+    /// on every selection change and tells both this view and the gutter to
+    /// redraw.
+    var currentLineHighlightEnabled: Bool = false
+    var currentLineHighlightColor: NSColor = .clear
+    /// Character offset of the start of the line containing the cursor. Used
+    /// by drawBackground to look up the line's fragment rect.
+    var currentLineCharIndex: Int = 0
+
     private let marginIconSize: CGFloat = 22
     private let marginIconRightInset: CGFloat = 8
     private let marginIconReserve: CGFloat = 44   // right-side reserved area for comment icons
@@ -654,11 +670,14 @@ final class ReadingTextView: NSTextView {
         guard let tc = textContainer else { return }
         let avail = bounds.width
         let reserve = marginIconReserve
+        // The gutter occupies the leading edge of the text inset (AC11.5), so
+        // its width is the floor of leftPad — replacing the old basePadding floor.
+        let gutterFloor = gutter?.gutterWidth ?? basePadding
         // Target text container width: capped at maxReadingWidth, never below 40.
         let targetContainer = min(maxReadingWidth,
                                   max(40, avail - 2 * basePadding - reserve))
         let slack = max(0, avail - targetContainer - reserve)
-        let leftPad = max(basePadding, slack / 2)
+        let leftPad = max(gutterFloor, slack / 2)
         let rightPad = leftPad + reserve
         let containerWidth = max(40, avail - leftPad - rightPad)
 
@@ -668,12 +687,40 @@ final class ReadingTextView: NSTextView {
         if abs(tc.size.width - containerWidth) > 0.5 {
             tc.size = NSSize(width: containerWidth, height: CGFloat.greatestFiniteMagnitude)
         }
+        gutter?.syncFrame()
         needsDisplay = true
     }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+        drawCurrentLineHighlight(in: rect)
         drawQuoteBackgrounds(in: rect)
+    }
+
+    private func drawCurrentLineHighlight(in dirtyRect: NSRect) {
+        guard currentLineHighlightEnabled,
+              let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let len = storage.length
+        let safeIndex = min(max(0, currentLineCharIndex), len)
+        // When the cursor is at the very end and the document is empty / ends
+        // with a newline, fall back to the position just before to get a valid
+        // line fragment.
+        let lookupIndex = (safeIndex == len && len > 0) ? len - 1 : safeIndex
+        let glyphIdx = lm.glyphIndexForCharacter(at: lookupIndex)
+        var effective = NSRange(location: 0, length: 0)
+        let fragRect = lm.lineFragmentRect(forGlyphAt: glyphIdx,
+                                           effectiveRange: &effective)
+        let origin = textContainerOrigin
+        // Highlight the full-width band: from the text container's left edge to
+        // its right edge. Use container size so it doesn't shrink to the line's
+        // used width.
+        let r = NSRect(x: origin.x, y: origin.y + fragRect.minY,
+                       width: tc.size.width, height: fragRect.height)
+        if !r.intersects(dirtyRect) { return }
+        currentLineHighlightColor.setFill()
+        r.fill()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1060,40 +1107,112 @@ final class ReadingTextView: NSTextView {
     }
 }
 
-// MARK: - Line-number ruler (raw mode only)
+// MARK: - Line-number gutter
 
-final class LineNumberRulerView: NSRulerView {
+/// Floating left-edge gutter that draws line numbers in raw mode.
+///
+/// Unlike NSRulerView (which is pinned to the scroll view's left wall), this is
+/// added via `NSScrollView.addFloatingSubview(_:for: .vertical)` and repositioned
+/// to sit immediately to the left of the text content area (AC11.5). Its width
+/// is also the floor for the text view's `textContainerInset.width`, so toggling
+/// `drawsLabels` (raw vs. rendered) preserves the text's horizontal position
+/// (AC11.4).
+final class LineNumberGutterView: NSView {
+    weak var textView: ReadingTextView?
+    weak var scrollView: NSScrollView?
+
     var lineNumberColor: NSColor = .secondaryLabelColor
+    var backgroundColor: NSColor = .clear
     var rulerFont: NSFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 
-    init(textView: NSTextView, scrollView: NSScrollView) {
-        super.init(scrollView: scrollView, orientation: .verticalRuler)
-        self.clientView = textView
-        self.ruleThickness = 44
+    /// When false (rendered mode), the gutter still reserves its width but skips
+    /// drawing the numbers themselves (AC11.3 + AC11.4).
+    var drawsLabels: Bool = true { didSet { needsDisplay = true } }
+
+    /// 1-based logical line number containing the caret, used to bold the
+    /// matching label and paint a tint band across the gutter. 0 = no
+    /// highlight (e.g. rendered mode).
+    var currentLineNumber: Int = 0 { didSet { needsDisplay = true } }
+    var currentLineHighlightColor: NSColor = .clear
+
+    /// Right-edge inset between labels and the text content. Without this the
+    /// rightmost digit would butt directly against the first character of text.
+    private let labelRightInset: CGFloat = 6
+    /// Left-edge breathing room so digits don't crowd the gutter's outer edge.
+    private let labelLeftInset: CGFloat = 4
+
+    /// Number of digits the gutter is sized for. Grows/shrinks dynamically as
+    /// the document's line count crosses a power-of-ten boundary.
+    var digitCount: Int = 2 {
+        didSet {
+            if digitCount != oldValue {
+                _ = updateWidth()
+                textView?.invalidateIntrinsicContentSize()
+                // Trigger the text view to re-evaluate its inset floor.
+                if let tv = textView { tv.setFrameSize(tv.frame.size) }
+            }
+        }
     }
 
-    required init(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+    private(set) var gutterWidth: CGFloat = 0
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
-        guard let tv = clientView as? NSTextView,
+    override var isFlipped: Bool { true }
+
+    init(textView: ReadingTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        self.scrollView = scrollView
+        super.init(frame: .zero)
+        _ = updateWidth()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    /// Recompute width to fit the current `digitCount` using the ruler font.
+    /// Returns the new width.
+    @discardableResult
+    func updateWidth() -> CGFloat {
+        let template = String(repeating: "8", count: max(2, digitCount)) as NSString
+        let advance = template.size(withAttributes: [.font: rulerFont]).width
+        gutterWidth = ceil(advance) + labelLeftInset + labelRightInset
+        return gutterWidth
+    }
+
+    /// Reposition the gutter so it sits flush against the text content area
+    /// (AC11.5). Called from `ReadingTextView.updateReadingMargins` and after
+    /// scroll-view resize.
+    func syncFrame() {
+        guard let tv = textView, let scroll = scrollView else { return }
+        let clip = scroll.contentView
+        // The clip view shows the document view. Text content starts at
+        // `clip.minX + textContainerInset.width` in scroll-view coords. The
+        // gutter occupies the strip [textStart - gutterWidth, textStart].
+        let clipFrame = clip.convert(clip.bounds, to: scroll)
+        let leftPad = tv.textContainerInset.width
+        let x = clipFrame.minX + leftPad - gutterWidth
+        let frame = NSRect(x: x, y: clipFrame.minY,
+                           width: gutterWidth, height: clipFrame.height)
+        if self.frame != frame { self.frame = frame }
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        backgroundColor.setFill()
+        bounds.fill()
+
+        guard drawsLabels,
+              let tv = textView,
               let lm = tv.layoutManager,
               let tc = tv.textContainer else { return }
         let nsString = tv.string as NSString
         if nsString.length == 0 { return }
 
-        // Paint background to match the text view so the gutter blends in.
-        if let bg = tv.backgroundColor.usingColorSpace(.sRGB) {
-            bg.setFill()
-            bounds.fill()
-        }
-
         let visibleRect = tv.visibleRect
         let glyphRange = lm.glyphRange(forBoundingRect: visibleRect, in: tc)
-        if glyphRange.length == 0 && nsString.length > 0 { return }
+        if glyphRange.length == 0 { return }
         let charRange = lm.characterRange(forGlyphRange: glyphRange,
                                           actualGlyphRange: nil)
 
-        // Compute starting logical line number by counting newlines before charRange.
+        // Starting line number = 1 + newline count before charRange.location.
         var lineNumber = 1
         var idx = 0
         while idx < charRange.location {
@@ -1101,8 +1220,13 @@ final class LineNumberRulerView: NSRulerView {
             idx += 1
         }
 
-        let attrs: [NSAttributedString.Key: Any] = [
+        let normalAttrs: [NSAttributedString.Key: Any] = [
             .font: rulerFont,
+            .foregroundColor: lineNumberColor
+        ]
+        let boldFont = NSFontManager.shared.convert(rulerFont, toHaveTrait: .boldFontMask)
+        let boldAttrs: [NSAttributedString.Key: Any] = [
+            .font: boldFont,
             .foregroundColor: lineNumberColor
         ]
 
@@ -1111,7 +1235,8 @@ final class LineNumberRulerView: NSRulerView {
         let endChar = NSMaxRange(charRange)
 
         // Iterate by paragraph (logical line). Only the first line fragment of
-        // each paragraph gets a number — wrapped continuation rows are skipped.
+        // each paragraph gets a number — wrapped continuation rows are skipped
+        // (AC11.2).
         while cursor < endChar {
             let lineRange = nsString.lineRange(for: NSRange(location: cursor, length: 0))
             let glyphIdx = lm.glyphIndexForCharacter(at: lineRange.location)
@@ -1119,16 +1244,26 @@ final class LineNumberRulerView: NSRulerView {
             let fragRect = lm.lineFragmentRect(forGlyphAt: glyphIdx,
                                                effectiveRange: &effective)
 
-            // Convert fragment rect (layoutManager coords) to ruler coords.
-            // textContainerOrigin already accounts for textContainerInset.
+            // Map text-view coords to gutter coords. The gutter is a floating
+            // subview pinned vertically to the scroll view, so visibleRect.minY
+            // is the offset between the two coordinate systems.
             let yInTextView = fragRect.minY + originY
-            let yInRuler = yInTextView - visibleRect.minY
+            let yInGutter = yInTextView - visibleRect.minY
 
+            let isCurrent = (lineNumber == currentLineNumber)
+            if isCurrent {
+                let band = NSRect(x: 0, y: yInGutter,
+                                  width: bounds.width, height: fragRect.height)
+                currentLineHighlightColor.setFill()
+                band.fill()
+            }
+
+            let attrs = isCurrent ? boldAttrs : normalAttrs
             let label = "\(lineNumber)" as NSString
             let size = label.size(withAttributes: attrs)
             let drawRect = NSRect(
-                x: bounds.width - size.width - 6,
-                y: yInRuler + (fragRect.height - size.height) / 2,
+                x: bounds.width - size.width - labelRightInset,
+                y: yInGutter + (fragRect.height - size.height) / 2,
                 width: size.width,
                 height: size.height
             )
@@ -1198,36 +1333,52 @@ struct MarkdownEditor: NSViewRepresentable {
         scroll.documentView = tv
         scrollBridge.scrollView = scroll
 
-        let ruler = LineNumberRulerView(textView: tv, scrollView: scroll)
-        scroll.verticalRulerView = ruler
-        scroll.hasVerticalRuler = true
-        scroll.rulersVisible = (mode == .raw)
-        ruler.lineNumberColor = palette.lineNumberColor
-        context.coordinator.ruler = ruler
+        let gutter = LineNumberGutterView(textView: tv, scrollView: scroll)
+        gutter.lineNumberColor = palette.lineNumberColor
+        gutter.backgroundColor = palette.background
+        let initialTint = palette.bodyColor.withAlphaComponent(0.04)
+        gutter.currentLineHighlightColor = initialTint
+        gutter.drawsLabels = (mode == .raw)
+        tv.currentLineHighlightColor = initialTint
+        tv.gutter = gutter
+        scroll.addFloatingSubview(gutter, for: .vertical)
+        context.coordinator.gutter = gutter
 
-        // Redraw the gutter on text edits and on every scroll tick.
-        // Cocoa redraws on scroll *most* of the time, but with
+        // Redraw on text edits and on every scroll tick. With
         // allowsNonContiguousLayout = true the layout manager can return stale
-        // fragment rects mid-scroll — observing contentView bounds keeps the
-        // gutter glued to the text.
+        // fragment rects mid-scroll, so observing contentView bounds is what
+        // keeps the labels glued to the text fragments.
         NotificationCenter.default.addObserver(
             forName: NSText.didChangeNotification,
             object: tv, queue: .main
-        ) { [weak ruler] _ in
-            ruler?.needsDisplay = true
+        ) { [weak gutter] _ in
+            gutter?.needsDisplay = true
         }
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scroll.contentView, queue: .main
-        ) { [weak ruler] _ in
-            ruler?.needsDisplay = true
+        ) { [weak gutter] _ in
+            gutter?.needsDisplay = true
+        }
+        // Resize of the scroll view itself (e.g. window resize) repositions
+        // the gutter so it stays adjacent to the text inset.
+        scroll.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: scroll, queue: .main
+        ) { [weak gutter] _ in
+            gutter?.syncFrame()
         }
 
         tv.string = text
         applyAppearance(to: tv)
         context.coordinator.lastMode = mode
         context.coordinator.applyHighlighting(to: tv)
+        context.coordinator.updateGutterDigitsIfNeeded(for: tv)
+        // First syncFrame happens after the scroll view is in the window so
+        // contentView has real bounds; defer one runloop tick.
+        DispatchQueue.main.async { [weak gutter] in gutter?.syncFrame() }
         return scroll
     }
 
@@ -1243,12 +1394,20 @@ struct MarkdownEditor: NSViewRepresentable {
         context.coordinator.applyHighlighting(to: tv)
         context.coordinator.lastMode = mode
 
-        // Line-number gutter visibility tracks raw mode (AC11.3).
-        scroll.rulersVisible = (mode == .raw)
-        if let ruler = context.coordinator.ruler {
-            ruler.lineNumberColor = palette.lineNumberColor
-            ruler.needsDisplay = true
+        // Line-number visibility tracks raw mode (AC11.3); the gutter strip
+        // itself stays in the layout so the text doesn't shift horizontally
+        // between modes (AC11.4).
+        let highlightTint = palette.bodyColor.withAlphaComponent(0.04)
+        tv.currentLineHighlightColor = highlightTint
+        if let gutter = context.coordinator.gutter {
+            gutter.lineNumberColor = palette.lineNumberColor
+            gutter.backgroundColor = palette.background
+            gutter.currentLineHighlightColor = highlightTint
+            gutter.drawsLabels = (mode == .raw)
+            context.coordinator.updateGutterDigitsIfNeeded(for: tv)
+            gutter.syncFrame()
         }
+        context.coordinator.syncCurrentLine(in: tv)
 
         // Run the sidebar-requested jump AFTER applyHighlighting so the highlight
         // path's save/restore of scroll origin (ContentView.swift:1183-1188) does
@@ -1340,19 +1499,69 @@ struct MarkdownEditor: NSViewRepresentable {
         var parent: MarkdownEditor
         var lastMode: DisplayMode = .rendered
         var lastAppliedJumpNonce: Int = 0
-        weak var ruler: LineNumberRulerView?
+        weak var gutter: LineNumberGutterView?
 
         init(_ parent: MarkdownEditor) { self.parent = parent }
+
+        /// Walk the document once to derive digit count for the gutter. Only
+        /// triggers a width change when the count crosses a power-of-ten
+        /// boundary (e.g. 99 → 3 digits, 999 → 4), so this is essentially
+        /// free for everyday edits.
+        func updateGutterDigitsIfNeeded(for tv: NSTextView) {
+            guard let gutter = gutter else { return }
+            let ns = tv.string as NSString
+            let len = ns.length
+            var lines = 1
+            var i = 0
+            while i < len {
+                if ns.character(at: i) == 0x0A { lines += 1 }
+                i += 1
+            }
+            let digits = max(2, Int(floor(log10(Double(lines)))) + 1)
+            if digits != gutter.digitCount {
+                gutter.digitCount = digits
+            }
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
             applyHighlighting(to: tv)
+            updateGutterDigitsIfNeeded(for: tv)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             if parent.mode == .rendered { applyHighlighting(to: tv) }
+            syncCurrentLine(in: tv)
+        }
+
+        /// Recompute the cursor's logical line number and push it to both the
+        /// text view (for the body tint band) and the gutter (for the bold
+        /// label + gutter tint). Raw mode only.
+        func syncCurrentLine(in tv: NSTextView) {
+            guard let rtv = tv as? ReadingTextView else { return }
+            let raw = (parent.mode == .raw)
+            let sel = tv.selectedRange()
+            let ns = tv.string as NSString
+            let loc = min(max(0, sel.location), ns.length)
+            // Count newlines in [0, loc) for a 1-based line number.
+            var line = 1
+            var i = 0
+            while i < loc {
+                if ns.character(at: i) == 0x0A { line += 1 }
+                i += 1
+            }
+            // Line-start char index (for body-highlight fragment lookup).
+            let lineStart = ns.lineRange(for: NSRange(location: loc, length: 0)).location
+
+            rtv.currentLineHighlightEnabled = raw
+            rtv.currentLineCharIndex = lineStart
+            rtv.needsDisplay = true
+            if let gutter = gutter {
+                gutter.currentLineNumber = raw ? line : 0
+                gutter.needsDisplay = true
+            }
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at _: Int) -> Bool {
