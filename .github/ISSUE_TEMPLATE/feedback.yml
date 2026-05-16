@@ -1,0 +1,19 @@
+name: General feedback
+description: Open-ended thoughts, impressions, "this feels weird," compliments, anything.
+title: "[Feedback] "
+labels: ["feedback"]
+body:
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      placeholder: "0.1.0"
+    validations:
+      required: false
+  - type: textarea
+    id: thoughts
+    attributes:
+      label: What's on your mind?
+      description: No structure required. Just tell me what you think.
+    validations:
+      required: true

@@ -185,6 +185,36 @@ struct MarkThisDownApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }
+
+            CommandGroup(after: .help) {
+                Divider()
+                Button("Report a Bug…") {
+                    Self.openFeedback(template: "bug.yml")
+                }
+                Button("Request a Feature…") {
+                    Self.openFeedback(template: "feature.yml")
+                }
+                Button("Send Feedback…") {
+                    Self.openFeedback(template: "feedback.yml")
+                }
+            }
+        }
+    }
+
+    private static let feedbackRepo = "LeviHirsch/mark-this-down"
+
+    private static func openFeedback(template: String) {
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+
+        var components = URLComponents(string: "https://github.com/\(feedbackRepo)/issues/new")
+        components?.queryItems = [
+            URLQueryItem(name: "template", value: template),
+            URLQueryItem(name: "app-version", value: appVersion),
+            URLQueryItem(name: "macos-version", value: osVersion)
+        ]
+        if let url = components?.url {
+            NSWorkspace.shared.open(url)
         }
     }
 }

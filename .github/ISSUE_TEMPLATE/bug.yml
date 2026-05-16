@@ -1,0 +1,45 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown in Mark This Down → About, or prefilled if you opened this from the Help menu.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Apple menu → About This Mac
+      placeholder: "macOS 15.0 (Sequoia)"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, in order?
+      placeholder: |
+        1. Open a .md file with frontmatter
+        2. Press ⌘E to toggle raw mode
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Screenshots welcome.
+    validations:
+      required: true

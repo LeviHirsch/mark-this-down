@@ -91,19 +91,6 @@ markthisdown/                       # Xcode project root
 5. **First launch only**: right-click the app in Finder → **Open** → click **Open** in the Gatekeeper warning dialog. (We're unsigned because we don't have a paid Apple Developer account; this one-time bypass is normal.)
 6. After that they can launch it like any app.
 
-## Putting this on GitHub (optional, manual)
-
-The local repo is already initialized. To push:
-
-```bash
-cd ~/dev/mtd_mark-this-down/markthisdown
-# create the repo on github.com (web UI), then:
-git remote add origin https://github.com/<your-username>/markthisdown.git
-git push -u origin main
-```
-
-If you install GitHub CLI (`brew install gh`), you can `gh repo create` from the terminal.
-
 ## Roadmap (future v2 work)
 
 - Block-element marker hiding (`#`, ``` ``` ```, `>` markers also hide based on cursor).
