@@ -115,3 +115,14 @@ Optional fifth-and-later parameters (deferred-within-deferred): a stable hex ID 
 **Resolution:** Comment placement on structural lines is now cursor-position-aware: marker-zone cursor → EOL insertion; text-zone cursor → inline at cursor. See `decisions.log` DEC-002.
 **Original description:** Block-above insertion on list items may break list continuity (blank line mid-list ends the list in most renderers). Inline insertion may be preferable for list items. Needs a design decision: resolve as `/spec decide` during seed or implementation phase.
 **Source:** via /spec interview Phase A ambiguity 6 (iteration 1)
+
+---
+
+## D-009 — True cell-based table rendering (proportional layout, padding, reflow)
+
+**Category:** feature
+**Deferred since:** iteration 1
+**Last touched:** iteration 1 (2026-05-16)
+**Defer count:** 0
+**Description:** Replace the current attribute-overlay table rendering (monospace + drawn column/row rules over source text) with a true cell-based layout: per-cell padding, proportional column widths sized to content, body-font (non-monospace) text, and per-cell content reflow on wrap. Requires moving away from source-faithful character-position rendering — likely via NSTextAttachments, a custom table view embedded as an attachment, or a custom NSLayoutManager pass that consumes the pipe-table source and lays out cells independently. Affects AC9.3 (raw mode unchanged) only in that the underlying storage may need a parallel non-source rendering pass while keeping source intact for raw mode.
+**Source:** via /spec defer (standalone, iteration 1 — ad-hoc table polish discussion 2026-05-16)
