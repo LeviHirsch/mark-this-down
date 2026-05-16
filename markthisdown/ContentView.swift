@@ -1122,6 +1122,9 @@ final class LineNumberGutterView: NSView {
     weak var scrollView: NSScrollView?
 
     var lineNumberColor: NSColor = .secondaryLabelColor
+    /// Foreground color for the caret's line label (paired with bold weight).
+    /// Drawn only when `currentLineNumber > 0`.
+    var chosenLineNumberColor: NSColor = .labelColor
     var backgroundColor: NSColor = .clear
     var rulerFont: NSFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 
@@ -1137,7 +1140,7 @@ final class LineNumberGutterView: NSView {
 
     /// Right-edge inset between labels and the text content. Without this the
     /// rightmost digit would butt directly against the first character of text.
-    private let labelRightInset: CGFloat = 6
+    private let labelRightInset: CGFloat = 12
     /// Left-edge breathing room so digits don't crowd the gutter's outer edge.
     private let labelLeftInset: CGFloat = 4
 
@@ -1225,9 +1228,9 @@ final class LineNumberGutterView: NSView {
             .foregroundColor: lineNumberColor
         ]
         let boldFont = NSFontManager.shared.convert(rulerFont, toHaveTrait: .boldFontMask)
-        let boldAttrs: [NSAttributedString.Key: Any] = [
+        let currentAttrs: [NSAttributedString.Key: Any] = [
             .font: boldFont,
-            .foregroundColor: lineNumberColor
+            .foregroundColor: chosenLineNumberColor
         ]
 
         let originY = tv.textContainerOrigin.y
@@ -1258,7 +1261,7 @@ final class LineNumberGutterView: NSView {
                 band.fill()
             }
 
-            let attrs = isCurrent ? boldAttrs : normalAttrs
+            let attrs = isCurrent ? currentAttrs : normalAttrs
             let label = "\(lineNumber)" as NSString
             let size = label.size(withAttributes: attrs)
             let drawRect = NSRect(
@@ -1335,6 +1338,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         let gutter = LineNumberGutterView(textView: tv, scrollView: scroll)
         gutter.lineNumberColor = palette.lineNumberColor
+        gutter.chosenLineNumberColor = palette.chosenLineNumberColor
         gutter.backgroundColor = palette.background
         let initialTint = palette.bodyColor.withAlphaComponent(0.04)
         gutter.currentLineHighlightColor = initialTint
@@ -1401,6 +1405,7 @@ struct MarkdownEditor: NSViewRepresentable {
         tv.currentLineHighlightColor = highlightTint
         if let gutter = context.coordinator.gutter {
             gutter.lineNumberColor = palette.lineNumberColor
+            gutter.chosenLineNumberColor = palette.chosenLineNumberColor
             gutter.backgroundColor = palette.background
             gutter.currentLineHighlightColor = highlightTint
             gutter.drawsLabels = (mode == .raw)

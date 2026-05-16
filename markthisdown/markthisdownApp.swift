@@ -17,6 +17,7 @@ struct ThemePalette {
     let tagColor: NSColor
     let tableBorderColor: NSColor
     let lineNumberColor: NSColor
+    let chosenLineNumberColor: NSColor
 
     let renderedBodyFont: NSFont
     let rawBodyFont: NSFont
@@ -83,6 +84,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         tagColor: NSColor(calibratedRed: 0.55, green: 0.27, blue: 0.68, alpha: 1),
         tableBorderColor: NSColor(white: 0.72, alpha: 1),
         lineNumberColor: NSColor(white: 0.55, alpha: 1),
+        chosenLineNumberColor: NSColor(white: 0.20, alpha: 1),
         renderedBodyFont: renderedBody,
         rawBodyFont: rawBody,
         codeFont: codeFont,
@@ -105,6 +107,7 @@ enum AppTheme: String, CaseIterable, Identifiable {
         tagColor: NSColor(calibratedRed: 0.83, green: 0.62, blue: 0.96, alpha: 1),
         tableBorderColor: NSColor(white: 0.45, alpha: 1),
         lineNumberColor: NSColor(white: 0.50, alpha: 1),
+        chosenLineNumberColor: NSColor(white: 0.80, alpha: 1),
         renderedBodyFont: renderedBody,
         rawBodyFont: rawBody,
         codeFont: codeFont,
