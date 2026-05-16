@@ -1,0 +1,89 @@
+# =============================================================================
+# .gitignore for a Swift / Xcode macOS project
+# Patterns are matched against paths relative to this file.
+# A line starting with # is a comment. A blank line is ignored.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# macOS Finder noise
+# -----------------------------------------------------------------------------
+# .DS_Store files are created by Finder to remember view settings for a folder
+# (icon positions, sort order, etc). Useless to anyone else; never commit.
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# -----------------------------------------------------------------------------
+# Xcode user-specific files
+# -----------------------------------------------------------------------------
+# xcuserdata/ holds per-user state inside an .xcodeproj or .xcworkspace:
+#   - which scheme is currently selected
+#   - your personal breakpoints
+#   - window layouts, recent files, etc.
+# When someone else clones your repo they don't want your scheme selections.
+# This is the most common Xcode .gitignore mistake.
+**/xcuserdata/
+
+# *.xcuserstate stores the open-tabs / cursor positions for your Xcode session.
+# Same deal — purely personal, churns constantly, never useful to others.
+*.xcuserstate
+
+# -----------------------------------------------------------------------------
+# Xcode build output
+# -----------------------------------------------------------------------------
+# build/ is the legacy in-project build folder. Modern Xcode uses DerivedData/
+# (outside the project), but build/ can still appear if you customize settings.
+build/
+DerivedData/
+
+# Compiled outputs — .o (object files), .hmap (header maps), .ipa (iOS apps).
+# All regenerable; never check in compiled artifacts.
+*.o
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# -----------------------------------------------------------------------------
+# Swift Package Manager
+# -----------------------------------------------------------------------------
+# Package.resolved IS committed (it pins exact dependency versions — like a
+# lockfile). NOT in this gitignore. We DO ignore the build artifacts though:
+.swiftpm/
+.build/
+Packages/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# -----------------------------------------------------------------------------
+# Carthage (in case it's ever added)
+# -----------------------------------------------------------------------------
+Carthage/Build/
+
+# -----------------------------------------------------------------------------
+# CocoaPods (in case it's ever added)
+# -----------------------------------------------------------------------------
+Pods/
+
+# -----------------------------------------------------------------------------
+# Secrets and local-only configs
+# -----------------------------------------------------------------------------
+# .env files often contain API keys / credentials. Always ignore by convention,
+# even if you don't have one today — protects future-you from a slip.
+.env
+.env.local
+*.p12
+*.p8
+*.cer
+
+# -----------------------------------------------------------------------------
+# Editor / IDE noise (in case you ever open the project elsewhere)
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -----------------------------------------------------------------------------
+# Project-specific
+# -----------------------------------------------------------------------------
+# (add anything Mark-This-Down–specific below as it comes up)
