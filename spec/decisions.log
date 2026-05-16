@@ -144,3 +144,15 @@
 **Context:** Implemented as in-scope additional work during the Phase 3 re-run that delivered AC11.4 and AC11.5; user requested it explicitly while the gutter code was being touched.
 
 ---
+
+## DEC-008 — 2026-05-15 — Accept AC21.5 gap: highlight stays visible when text view loses focus
+**Iteration:** 1
+**Decision:** Accept the Phase 3 audit gap on AC21.5. In raw mode, the current-line highlight remains visible even when the text view is not the first responder (e.g. focus on sidebar or toolbar). No first-responder gating is added to `syncCurrentLine`.
+**Rationale:** User judged the persistent-highlight behavior preferable to the spec'd focus-gated behavior — keeping the "you are here" anchor visible while interacting with surrounding UI is more useful than hiding it.
+**Alternatives considered:**
+  - Implement first-responder gating per AC21.5 as written — rejected: user prefers the persistent behavior in practice.
+  - Defer to a future iteration — rejected: the current behavior is the desired one, not a placeholder.
+**Related:** AC21.5, DEC-007
+**Context:** Surfaced in Phase 3 audit (v001-2026-05-15-2222-implement-phase3.md). AC21.5 text in spec.md still says "only active when text view is first responder" — consider amending in a future reconcile if the implemented behavior should become canonical.
+
+---
