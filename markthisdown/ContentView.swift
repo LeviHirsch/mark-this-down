@@ -17,6 +17,8 @@ extension NSAttributedString.Key {
     static let mtdCommentLocation = NSAttributedString.Key("mtdCommentLocation")
     static let mtdTablePipe = NSAttributedString.Key("mtdTablePipe")
     static let mtdTablePipeColor = NSAttributedString.Key("mtdTablePipeColor")
+    // mtdTableRowEdge values: "top", "header", "bottom"
+    static let mtdTableRowEdge = NSAttributedString.Key("mtdTableRowEdge")
 }
 
 private var appVersion: String {
@@ -729,6 +731,7 @@ final class ReadingTextView: NSTextView {
         drawQuoteBars(in: dirtyRect)
         drawBullets(in: dirtyRect)
         drawTablePipes(in: dirtyRect)
+        drawTableHorizontalRules(in: dirtyRect)
 
         // Margin icons live OUTSIDE the textContainer clip — expand to full bounds.
         NSGraphicsContext.saveGraphicsState()
@@ -942,6 +945,61 @@ final class ReadingTextView: NSTextView {
             if !r.intersects(dirtyRect) { return }
             color.setFill()
             r.fill()
+        }
+    }
+
+    private func drawTableHorizontalRules(in dirtyRect: NSRect) {
+        guard let lm = layoutManager,
+              let tc = textContainer,
+              let storage = textStorage else { return }
+        let origin = textContainerOrigin
+        let lineWidth: CGFloat = 1
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.mtdTableRowEdge, in: fullRange) { value, attrRange, _ in
+            guard let kind = value as? String else { return }
+
+            // Span the line from the leftmost pipe to the rightmost pipe so
+            // the horizontal rule meets the column separators exactly.
+            var minX: CGFloat = .infinity
+            var maxX: CGFloat = -.infinity
+            storage.enumerateAttribute(.mtdTablePipe, in: attrRange) { v, r, _ in
+                guard (v as? Bool) == true else { return }
+                let g = lm.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+                let b = lm.boundingRect(forGlyphRange: g, in: tc)
+                minX = min(minX, b.midX)
+                maxX = max(maxX, b.midX)
+            }
+            guard maxX > minX else { return }
+
+            let glyphRange = lm.glyphRange(forCharacterRange: attrRange,
+                                           actualCharacterRange: nil)
+            let lineBounds = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
+
+            let color = (storage.attribute(.mtdTablePipeColor,
+                                           at: attrRange.location,
+                                           effectiveRange: nil) as? NSColor)
+                ?? NSColor.separatorColor
+
+            let drawAt: (CGFloat) -> Void = { yRel in
+                let r = NSRect(x: origin.x + minX,
+                               y: origin.y + yRel - lineWidth / 2,
+                               width: maxX - minX,
+                               height: lineWidth)
+                if !r.intersects(dirtyRect) { return }
+                color.setFill()
+                r.fill()
+            }
+
+            switch kind {
+            case "header":
+                drawAt(lineBounds.minY)
+                drawAt(lineBounds.maxY)
+            case "bottom":
+                drawAt(lineBounds.maxY)
+            default:
+                break
+            }
         }
     }
 
@@ -2110,9 +2168,8 @@ enum SyntaxHighlighter {
                                    palette: ThemePalette,
                                    codeFont: NSFont,
                                    bodyFont: NSFont) {
-        // Whole table: monospace + tinted background (matches code-block treatment).
+        // Whole table: monospace (column alignment depends on it).
         storage.addAttribute(.font, value: codeFont, range: tableRange)
-        storage.addAttribute(.backgroundColor, value: palette.codeBackground, range: tableRange)
 
         // Header row: bold.
         let baseHeaderFont = (storage.attribute(.font,
@@ -2152,6 +2209,24 @@ enum SyntaxHighlighter {
                 storage.addAttribute(.mtdTablePipeColor, value: palette.tableBorderColor, range: r)
             }
             i += 1
+        }
+
+        // Tag the header line so drawTableHorizontalRules paints the top border
+        // (above header) and the header-separator border (below header / above body).
+        storage.addAttribute(.mtdTableRowEdge, value: "header", range: headerLineRange)
+        storage.addAttribute(.mtdTablePipeColor, value: palette.tableBorderColor,
+                             range: headerLineRange)
+
+        // Tag the final body line so the bottom border is drawn beneath it. When
+        // the table has no body (header + separator only) fall back to the
+        // separator range so we still close the box.
+        let afterSeparator = NSMaxRange(separatorLineRange)
+        if afterSeparator < NSMaxRange(tableRange) {
+            let lastBodyLineRange = nsStr.lineRange(
+                for: NSRange(location: NSMaxRange(tableRange) - 1, length: 0))
+            storage.addAttribute(.mtdTableRowEdge, value: "bottom", range: lastBodyLineRange)
+            storage.addAttribute(.mtdTablePipeColor, value: palette.tableBorderColor,
+                                 range: lastBodyLineRange)
         }
     }
 
