@@ -103,3 +103,44 @@
 **Context:** Auto-logged during /spec check (iteration 1).
 
 ---
+
+## DEC-005 — 2026-05-15 — Reader-first focus policy on document open
+**Iteration:** 1
+**Decision:** A document with non-trivial content opens with the editor scrolled to the top, the text view NOT first responder, and no caret visible. An empty document or a frontmatter-only document opens with the text view as first responder and the caret at offset 0 (empty) or just past the frontmatter close (frontmatter-only). Click on text content places the caret at the click point and makes the text view first responder. Programmatic moves (outline jump, sidebar card tap) take first responder and place the caret at the target. No in-session gesture is provided to leave the editing state back to no-cursor reading — reading state applies at document open only.
+**Rationale:** The app is reader-first, editor-second. Opening to a blinking caret on the first heading (a) invites accidental keystrokes that would clobber the heading marker, (b) reveals the raw `#` markers in raw mode before the user has indicated they want to edit, and (c) implies an editing-first stance that contradicts the rendered-mode-as-primary UX. NSTextView always has an `NSRange` selection while it is first responder; "no cursor" can only be expressed as "not first responder." Empty / frontmatter-only documents are the explicit inverse: there is nothing to read, so the cursor's presence is an invitation to start typing.
+**Alternatives considered:**
+  - Always first responder, caret at offset 0 — rejected: produces the heading-clobber and raw-reveal problems described above.
+  - Always first responder, caret restored from per-document persisted state — rejected: complicates document state, adds persistence surface, still has heading-clobber problem on first open.
+  - Click-margin-inside-text-view to resign first responder — rejected: discoverability cost; standard NSTextView behavior is that clicking inside the text view places the caret. Departing from this convention without a clear UI signal would confuse users.
+  - Esc key resigns first responder — rejected for this iteration: cheap and conventional, but the user explicitly accepted the v1 limitation that there is no in-session gesture to return to reading state. Can be revisited if reading/editing-state ambiguity becomes a real complaint.
+**Related:** AC19.1, AC19.2, AC19.3, AC19.4, AC19.5
+**Context:** Surfaced during Phase 3 re-run while reviewing the implications of the new gutter and current-line-highlight behavior. The user explicitly framed the app as "a markdown reader you can also edit and comment on cleanly," which drove the focus default.
+
+---
+
+## DEC-006 — 2026-05-15 — Scroll anchoring on discrete mode and sidebar toggles
+**Iteration:** 1
+**Decision:** Mode toggle (raw ↔ rendered) and outline-sidebar toggle (open / close) preserve the user's vertical position via a one-shot anchor mechanism: the toggle handler captures `(anchorCharIndex, yOffsetWithinViewport)` BEFORE flipping the mode/sidebar state; `updateNSView` (or the equivalent layout-completion hook) consumes the token AFTER the layout pass and scrolls so the anchor's new fragment rect sits at the captured y-offset. The anchor character index = the cursor's logical-line start when the text view is first responder AND the cursor is within the visible rect; otherwise the topmost visible logical line's start (derived via `layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)`). Live window resize is NOT anchored — reflow during drag is acceptable.
+**Rationale:** Raw and rendered modes use different fonts with different line heights; the same character offset lives at a substantially different y-position in each mode. Without anchoring, toggling modes can shift a user's focal content by hundreds of pixels (especially in docs with rendered headings, which are roughly 2× body height). The sidebar case is analogous: opening the outline narrows the text container, which can change line wrapping and shift vertical positions. A discrete one-shot mechanism (capture-on-action, consume-once) is preferable to a continuous watch — it avoids per-layout-pass bookkeeping and matches the user's mental model: "the toggle button keeps my place." Live window resize is left unanchored because the user is actively reshaping the window and visual reflow during drag is expected, not surprising.
+**Alternatives considered:**
+  - Match rendered and raw fonts more closely to minimize y-displacement — rejected: defeats the rendered-mode visual goals and constrains future theming.
+  - Continuous focal-anchor that re-pins on every layout pass — rejected: per-frame work, harder to reason about, masks legitimate layout changes.
+  - Anchor on live window resize (capture on `mouseDown` of resize, restore on `mouseUp`) — rejected for this iteration: tearing during drag, marginal benefit since the user is already engaged with a visual change.
+  - Anchor only on the cursor's exact char index (no first-visible-line fallback) — rejected: fails for the reading case (per DEC-005, the text view is often not first responder) and for cases where the cursor is scrolled off-screen.
+**Related:** AC20.1, AC20.2, AC20.3, AC20.4, AC20.5, AC16.1 (existing same-y preservation for in-mode highlight recompute — preserved, not superseded)
+**Context:** Surfaced during Phase 3 re-run when the user pointed out that toggling to raw on a doc with rendered headings displaces the visible content significantly.
+
+---
+
+## DEC-007 — 2026-05-15 — Raw-mode current-line highlight rendering
+**Iteration:** 1
+**Decision:** In raw mode, the logical line containing the caret is rendered with: (a) a tint band across the full text-container width in the text body, (b) a matching tint band across the gutter row, (c) the gutter label for that line rendered in bold. Tint = body color at 4% alpha (matching the existing AC14.5 blockquote tint intensity). In rendered mode the highlight is fully off. The highlight is also off when the text view is not first responder (i.e. when AC19's reading state applies).
+**Rationale:** Editor-style current-line highlighting solves a real UX problem in raw mode — cursor re-location after taking eyes off the screen, or during arrow-key navigation in long monospace lines. Tinting both the gutter and the text row (Xcode style) provides redundant cues that anchor the eye immediately, vs. gutter-only tint (Sublime style) which solves only half the problem. Bolding the line label is a small additional cue that reads as "you are here." Disabled in rendered mode because the prose-reading visual would compete with the tint; disabled in reading state because there is no caret to highlight.
+**Alternatives considered:**
+  - Gutter-only tint, no bold (Sublime style) — rejected: requires the eye to dart back to the text to find the cursor; less effective.
+  - Stronger tint (e.g. 8% alpha) — rejected for now: 4% is consistent with existing blockquote tint and reads as a clear-but-not-distracting cue. Tunable if needed.
+  - Apply highlight in rendered mode as well — rejected: rendered mode is reader-oriented per DEC-005; a tinted line band would feel out of place.
+**Related:** AC21.1, AC21.2, AC21.3, AC21.4, AC21.5
+**Context:** Implemented as in-scope additional work during the Phase 3 re-run that delivered AC11.4 and AC11.5; user requested it explicitly while the gutter code was being touched.
+
+---

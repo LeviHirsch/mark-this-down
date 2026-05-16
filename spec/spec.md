@@ -106,7 +106,7 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - Code-fence edge cases: indented fences, backticks in comment body, comment delimiters as literal code-block content (deferred — D-002).
 - Comment parse debouncing beyond the single-parse fix (deferred — D-003).
 - List item insertion semantics redesign (deferred — D-004).
-- Raw-mode IDE enrichments beyond line numbers (line highlighting, gutter indicators, etc.) — deferred.
+- Raw-mode IDE enrichments beyond line numbers and current-line highlight (e.g. minimap, fold indicators, syntax-aware breadcrumbs) — deferred.
 
 ## Acceptance criteria (MECE)
 
@@ -211,6 +211,27 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - AC18.4. The install mechanism (menu item that symlinks to `/usr/local/bin/mtd`, manual step in README, etc.) is resolved via `/spec decide` during implementation. `[delta]`
 - AC18.5. Additional `mtd` subcommands beyond `-n` are out of scope for this iteration.
 
+### AC19. Reader-first focus on document open `[delta]`
+- AC19.1. When opening a document with non-trivial content, the editor scrolls to the top, the text view is NOT first responder, and no caret is visible. "Non-trivial content" = the document has at least one non-frontmatter, non-whitespace character. `[delta]`
+- AC19.2. When opening an empty document, or a document whose only content is a frontmatter block, the text view IS first responder, with the caret placed at character offset 0 (empty case) or at the first character past the frontmatter closing delimiter (frontmatter-only case). `[delta]`
+- AC19.3. Standard click-to-edit behavior is preserved: clicking on text content places the caret at the click point and makes the text view first responder. `[delta]`
+- AC19.4. Programmatic cursor moves (outline jump per AC12.3, sidebar card jump per AC8.3, etc.) take first responder and place the caret at the target regardless of prior focus state. `[delta]`
+- AC19.5. No in-session gesture is provided to return to the no-cursor reading state once the user has clicked into text; reading state applies only at document open. The user accepts standard NSTextView behavior thereafter. `[delta]`
+
+### AC20. Scroll anchoring across mode and sidebar toggles `[delta]`
+- AC20.1. Toggling between raw and rendered modes preserves the visual position of an anchor line: the line on screen before the toggle occupies approximately the same y-offset within the viewport after the toggle. `[delta]`
+- AC20.2. Opening or closing the outline sidebar preserves the visual position of an anchor line using the same mechanism as AC20.1. `[delta]`
+- AC20.3. The anchor is the cursor's logical line when the text view is first responder AND the cursor lies within the visible rect; otherwise the topmost visible logical line. `[delta]`
+- AC20.4. Anchor capture is a discrete action triggered by the toggle (mode or sidebar); it is NOT a continuous watch that runs on every layout pass. `[delta]`
+- AC20.5. Live window resize is NOT anchored; text reflow during a resize drag is acceptable. `[delta]`
+
+### AC21. Raw-mode current-line highlight `[delta]`
+- AC21.1. In raw mode, the logical line containing the caret renders with a tint band across the full text content width. Tint = body color at 4% alpha. `[delta]`
+- AC21.2. In raw mode, the gutter row aligned with the caret's logical line renders with a matching tint band. `[delta]`
+- AC21.3. In raw mode, the gutter label for the caret's logical line renders in bold. `[delta]`
+- AC21.4. In rendered mode, no current-line highlight is shown (neither in the text body nor in the gutter). `[delta]`
+- AC21.5. The current-line highlight is only active when the text view is first responder; when focus is elsewhere (per AC19) no highlight is shown. `[delta]`
+
 ## Implementation phases
 
 ### Phase 1. Bug fixes (Phase A build-change-todos)
@@ -230,12 +251,13 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 - AC8.1, AC8.2, AC8.3
 
 ### Phase 3. Markdown surface — tables, coloring, and line numbers
-**Delivers:** Tables render visually; file paths and bracket-tags are colored; line numbers appear in raw mode.
+**Delivers:** Tables render visually; file paths and bracket-tags are colored; line numbers appear in raw mode with a current-line highlight.
 **Depends on:** Phase 1 (correct syntax highlighter state post-bug-fixes)
 **Note:** Resolve file-path extension allowlist via `/spec decide` before starting this phase.
 - AC9.1, AC9.2
 - AC10.1, AC10.2, AC10.3
 - AC11.1, AC11.2, AC11.3, AC11.4, AC11.5
+- AC21.1, AC21.2, AC21.3, AC21.4, AC21.5
 
 ### Phase 4. Outline view
 **Delivers:** Left-panel outline listing headings; click-to-jump; scroll restore on close.
@@ -253,6 +275,12 @@ Provide a local-first annotation layer on plain Markdown files that preserves fu
 **Depends on:** Phase 1 (app stability)
 **Note:** Two `/spec decide` questions must be resolved before implementation: communication mechanism (AC18.3) and install mechanism (AC18.4).
 - AC18.1, AC18.2, AC18.3, AC18.4, AC18.5
+
+### Phase 7. Reader-first focus and scroll anchoring
+**Delivers:** Documents open in a no-cursor reading state when they have content; empty and frontmatter-only documents open in an editing state with the caret in the right place; mode toggle and outline-sidebar toggle preserve the user's vertical position via a discrete line-anchor mechanism.
+**Depends on:** Phase 3 (gutter and current-line behavior), Phase 4 (outline sidebar).
+- AC19.1, AC19.2, AC19.3, AC19.4, AC19.5
+- AC20.1, AC20.2, AC20.3, AC20.4, AC20.5
 
 ## Open questions
 
