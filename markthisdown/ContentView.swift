@@ -1112,36 +1112,19 @@ final class ReadingTextView: NSTextView {
                         let last = nsText.character(at: eol - 1)
                         if last == 0x0A { eol -= 1 }
                     }
-                    let needsLeadingSpace: Bool = {
-                        if eol == lineRange.location { return false }
-                        let prev = nsText.character(at: eol - 1)
-                        return !(prev == 0x20 || prev == 0x09)
-                    }()
-                    let template = needsLeadingSpace ? " <!--  -->" : "<!--  -->"
-                    let cursorOffset = needsLeadingSpace ? 6 : 5
                     return InsertionPlan(
-                        insertion: template,
+                        insertion: "<!--  -->",
                         insertion_location: eol,
-                        cursor_location: eol + cursorOffset
+                        cursor_location: eol + 5
                     )
                 }
                 // Past marker zone → fall through to inline-at-cursor below.
             }
-            // Inline at cursor. Leading space if not already preceded by ws.
             let cursor = selection.location
-            let needsLeadingSpace: Bool = {
-                if cursor == 0 { return false }
-                if cursor > nsText.length { return false }
-                let prev = nsText.character(at: cursor - 1)
-                if prev == 0x0A { return false }
-                return !(prev == 0x20 || prev == 0x09)
-            }()
-            let template = needsLeadingSpace ? " <!--  -->" : "<!--  -->"
-            let cursorOffset = needsLeadingSpace ? 6 : 5
             return InsertionPlan(
-                insertion: template,
+                insertion: "<!--  -->",
                 insertion_location: cursor,
-                cursor_location: cursor + cursorOffset
+                cursor_location: cursor + 5
             )
         }
 
@@ -1156,11 +1139,10 @@ final class ReadingTextView: NSTextView {
             )
         }
         let after = NSMaxRange(selection)
-        let template = " <!--  -->"
         return InsertionPlan(
-            insertion: template,
+            insertion: "<!--  -->",
             insertion_location: after,
-            cursor_location: after + 6
+            cursor_location: after + 5
         )
     }
 }
